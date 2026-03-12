@@ -120,12 +120,14 @@ if (dayCount.count !== 30 || (firstDay && !firstDay.verse.includes("-")) || (las
 }
 
 const prayerCount = db.prepare("SELECT COUNT(*) as count FROM prayers").get() as { count: number };
-if (prayerCount.count === 0) {
-  // Seed Crisis Prayers
+if (prayerCount.count < 7) {
+  db.prepare("DELETE FROM prayers").run();
   const insertPrayer = db.prepare("INSERT INTO prayers (category, title, content, declaration) VALUES (?, ?, ?, ?)");
   insertPrayer.run("Ansiedade", "Paz que Excede Entendimento", "Senhor, entrego agora todo o peso do meu coração. Minha mente está agitada, mas Tu é o Príncipe da Paz. Eu escolho não andar ansioso por coisa alguma, mas em tudo apresentar meus pedidos a Ti com ações de graças.", "Minha mente está guardada em Cristo Jesus. Eu descanso n'Ele.");
   insertPrayer.run("Medo", "Escudo e Fortaleza", "Pai, o medo tenta me paralisar. Mas Tua Palavra diz que não me deste espírito de temor, mas de poder, de amor e de moderação. Eu repreendo todo espírito de medo agora e me escondo sob Tuas asas.", "O Senhor é a minha luz e a minha salvação; de quem terei medo?");
   insertPrayer.run("Desânimo", "Renovação de Forças", "Senhor, sinto minhas forças se esgotando. Mas Tu prometeste que aqueles que esperam no Senhor renovarão suas forças. Voarão como águias. Correrão e não se cansarão.", "O Senhor é a força da minha vida. Eu me levanto em vitória.");
+  insertPrayer.run("Ataque Espiritual", "Armadura de Deus", "Senhor, me revisto agora de toda a Tua armadura. Tomo o escudo da fé para apagar todos os dardos inflamados do maligno. Declaro que maior és Tu que habitas em mim do que qualquer força das trevas. Em nome de Jesus, todo ataque é derrotado.", "Estou revestido da armadura de Deus e sou inabalável em Cristo.");
+  insertPrayer.run("Confusão", "Mente Renovada", "Pai, minha mente está confusa e cansada. Mas Tu não és Deus de confusão, e sim de paz. Renova minha mente agora pelo Teu Espírito. Dá-me clareza, direcionamento e entendimento sobrenatural para cada decisão.", "Tenho a mente de Cristo. Deus me dá clareza e direção.");
   insertPrayer.run("Financeiro", "O Senhor é meu Pastor", "Pai, as contas batem à porta, mas eu sei que Tu és o meu Provedor. Abro mão de toda preocupação e confio que suprirás cada uma das minhas necessidades segundo as Tuas riquezas em glória.", "O Senhor é meu pastor e nada me faltará.");
   insertPrayer.run("Família", "Casa Edificada na Rocha", "Senhor, consagro minha família a Ti. Que nossa casa seja um lugar de paz, perdão e alegria. Protege nossos relacionamentos de toda discórdia e maldade.", "Eu e minha casa serviremos ao Senhor.");
 }
@@ -228,10 +230,26 @@ async function startServer() {
 
   app.post("/api/user/progress", (req, res) => {
     try {
-      const { email, progress, streak } = req.body;
+      const { email, progress } = req.body;
+      const user = db.prepare("SELECT * FROM users WHERE email = ?").get(email) as any;
+      if (!user) return res.status(404).json({ error: "User not found" });
+
+      const today = new Date().toISOString().split('T')[0];
+      const lastAccess = user.last_access ? user.last_access.split('T')[0] : null;
+      const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
+
+      let newStreak = user.streak;
+      if (lastAccess === today) {
+        newStreak = user.streak;
+      } else if (lastAccess === yesterday) {
+        newStreak = user.streak + 1;
+      } else {
+        newStreak = 1;
+      }
+
       db.prepare("UPDATE users SET progress = ?, streak = ?, last_access = ? WHERE email = ?")
-        .run(progress, streak, new Date().toISOString(), email);
-      res.json({ success: true });
+        .run(progress, newStreak, new Date().toISOString(), email);
+      res.json({ success: true, streak: newStreak });
     } catch (err) {
       console.error(err);
       res.status(500).json({ error: "Failed to update progress" });

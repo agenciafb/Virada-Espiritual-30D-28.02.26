@@ -1142,7 +1142,6 @@ export default function App() {
     if (!user || !currentDay) return;
     
     const newProgress = Math.max(user.progress, currentDay.id);
-    const newStreak = user.streak + 1; // Simplified streak logic
 
     try {
       // Save reflection
@@ -1157,11 +1156,12 @@ export default function App() {
       const progRes = await fetch('/api/user/progress', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: user.email, progress: newProgress, streak: newStreak })
+        body: JSON.stringify({ email: user.email, progress: newProgress })
       });
       if (!progRes.ok) throw new Error('Failed to update progress');
+      const progData = await progRes.json();
       
-      setUser({ ...user, progress: newProgress, streak: newStreak });
+      setUser({ ...user, progress: newProgress, streak: progData.streak ?? user.streak });
       if (newProgress === 30) {
         setView('congratulations');
       } else {
@@ -1219,7 +1219,7 @@ export default function App() {
       </AnimatePresence>
 
       {/* Navigation Bar (only on home) */}
-      {view === 'home' && (
+      {['home', 'diary', 'profile'].includes(view) && (
         <nav className="fixed bottom-0 left-0 right-0 max-w-md mx-auto nav-blur px-8 py-4 flex justify-between items-center z-20">
           <button 
             onClick={() => setView('home')}
