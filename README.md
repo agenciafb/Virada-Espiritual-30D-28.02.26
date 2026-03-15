@@ -1,20 +1,25 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# Virada Espiritual 30D
 
-# Run and deploy your AI Studio app
+Uma jornada de 30 dias para transformação espiritual guiada, com devocionais diários, modo crise, áudios proféticos e checklists de hábitos.
 
-This contains everything you need to run your app locally.
+## Funcionalidades
 
-View your app in AI Studio: https://ai.studio/apps/cff13a4b-91f5-4572-a2f7-70120928f20c
+- **Jornada de 30 Dias**: Devocionais diários com versículos, reflexões e exercícios.
+- **Áudios Proféticos**: Tecnologia de áudio para orações e decretos.
+- **Modo Crise**: Orações específicas para momentos de ansiedade, medo, desânimo, etc.
+- **Checklist de Hábitos**: Acompanhamento diário de hábitos espirituais.
+- **Diário de Bordo**: Espaço para registrar gratidão e aprendizados.
 
-## Run Locally
+## Como rodar localmente
 
-**Prerequisites:**  Node.js
+1. Instale as dependências: `npm install`
+2. Inicie o servidor de desenvolvimento: `npm run dev`
+3. Acesse em: `http://localhost:3000`
 
+## Tecnologias
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+- React + Vite
+- Express (Backend)
+- SQLite (Banco de dados)
+- Tailwind CSS
+- Gemini API (Áudio/TTS)
