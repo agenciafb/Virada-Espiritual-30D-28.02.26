@@ -372,9 +372,24 @@ async function startServer() {
     }
   });
 
-  // API 404 handler
-  app.use("/api/*", (req, res) => {
-    res.status(404).json({ error: "API route not found" });
+  // API 404 handler - Catch all unhandled /api/* routes
+  app.all("/api/*", (req, res) => {
+    console.warn(`404 - API Route not found: ${req.method} ${req.originalUrl}`);
+    res.status(404).json({ 
+      error: "API route not found", 
+      method: req.method, 
+      path: req.originalUrl 
+    });
+  });
+
+  // General Error Handler
+  app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    console.error("Unhandled Server Error:", err);
+    if (req.path.startsWith("/api/")) {
+      res.status(500).json({ error: "Internal Server Error", message: err.message });
+    } else {
+      next(err);
+    }
   });
 
   // Vite middleware for development

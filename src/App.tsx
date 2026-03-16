@@ -1117,14 +1117,25 @@ export default function App() {
     setLoading(true);
     try {
       const res = await fetch(`/api/user/${encodeURIComponent(email)}`);
+      const contentType = res.headers.get("content-type");
+      
       if (!res.ok) {
-        const errorData = await res.json();
-        throw new Error(errorData.error || 'Falha no login');
+        if (contentType && contentType.includes("application/json")) {
+          const errorData = await res.json();
+          throw new Error(errorData.error || 'Falha no login');
+        } else {
+          throw new Error(`Erro no servidor (${res.status}). Por favor, tente novamente.`);
+        }
       }
-      const userData = await res.json();
-      setUser(userData);
-      localStorage.setItem('user_email', email);
-      setView('home');
+      
+      if (contentType && contentType.includes("application/json")) {
+        const userData = await res.json();
+        setUser(userData);
+        localStorage.setItem('user_email', email);
+        setView('home');
+      } else {
+        throw new Error("Resposta inválida do servidor. Por favor, recarregue a página.");
+      }
     } catch (err: any) {
       console.error(err);
       alert(err.message || "Erro ao entrar. Verifique sua conexão.");
@@ -1137,13 +1148,20 @@ export default function App() {
     setLoading(true);
     try {
       const res = await fetch(`/api/days/${encodeURIComponent(dayId)}`);
-      if (!res.ok) throw new Error('Failed to load day');
-      const dayData = await res.json();
-      setCurrentDay(dayData);
-      setView('day');
-    } catch (err) {
+      const contentType = res.headers.get("content-type");
+
+      if (!res.ok) throw new Error(`Falha ao carregar o dia (${res.status})`);
+      
+      if (contentType && contentType.includes("application/json")) {
+        const dayData = await res.json();
+        setCurrentDay(dayData);
+        setView('day');
+      } else {
+        throw new Error("Resposta inválida do servidor.");
+      }
+    } catch (err: any) {
       console.error(err);
-      alert("Erro ao carregar o dia. Tente novamente.");
+      alert(err.message || "Erro ao carregar o dia. Tente novamente.");
     } finally {
       setLoading(false);
     }
