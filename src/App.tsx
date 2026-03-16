@@ -283,22 +283,30 @@ const LoginPage = ({ onLogin, theme, onToggleTheme }: { onLogin: (email: string)
 
         <div className="space-y-8">
           <div className="space-y-3">
-            <label className="text-[10px] font-bold uppercase tracking-[0.2em] opacity-40 ml-1">Seu Acesso</label>
+            <div className="flex justify-between items-end">
+              <label className="text-[10px] font-bold uppercase tracking-[0.2em] opacity-40 ml-1">Seu Acesso</label>
+              <span className="text-[9px] uppercase tracking-widest opacity-30 mb-1">Acesso exclusivo para compradores</span>
+            </div>
             <input 
               type="email" 
-              placeholder="Digite seu melhor e-mail"
+              placeholder="E-mail usado na compra"
               className="app-input text-lg"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
             />
           </div>
-          <Button 
-            variant="gold" 
-            className="w-full py-6 text-xl font-medium shadow-2xl shadow-gold-500/20"
-            onClick={() => email && onLogin(email)}
-          >
-            Iniciar Minha Jornada
-          </Button>
+          <div className="space-y-4">
+            <Button 
+              variant="gold" 
+              className="w-full py-6 text-xl font-medium shadow-2xl shadow-gold-500/20"
+              onClick={() => email && onLogin(email)}
+            >
+              Iniciar Minha Jornada
+            </Button>
+            <p className="text-center text-[10px] opacity-30 uppercase tracking-widest">
+              Comprou agora? O acesso é liberado automaticamente após a aprovação.
+            </p>
+          </div>
         </div>
 
         <div className="flex items-center gap-6 py-4 opacity-20">
@@ -1109,14 +1117,17 @@ export default function App() {
     setLoading(true);
     try {
       const res = await fetch(`/api/user/${encodeURIComponent(email)}`);
-      if (!res.ok) throw new Error('Login failed');
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || 'Falha no login');
+      }
       const userData = await res.json();
       setUser(userData);
       localStorage.setItem('user_email', email);
       setView('home');
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      alert("Erro ao entrar. Verifique sua conexão.");
+      alert(err.message || "Erro ao entrar. Verifique sua conexão.");
     } finally {
       setLoading(false);
     }

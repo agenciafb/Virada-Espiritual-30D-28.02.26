@@ -216,15 +216,48 @@ async function startServer() {
   app.get("/api/user/:email", (req, res) => {
     try {
       const email = req.params.email;
-      let user = db.prepare("SELECT * FROM users WHERE email = ?").get(email);
+      const user = db.prepare("SELECT * FROM users WHERE email = ?").get(email);
+      
       if (!user) {
-        db.prepare("INSERT INTO users (email, name) VALUES (?, ?)").run(email, email.split('@')[0]);
-        user = db.prepare("SELECT * FROM users WHERE email = ?").get(email);
+        return res.status(403).json({ error: "Acesso negado. Este e-mail não possui uma compra ativa." });
       }
-      res.json(user || null);
+      
+      res.json(user);
     } catch (err) {
       console.error(err);
-      res.status(500).json({ error: "Failed to fetch/create user" });
+      res.status(500).json({ error: "Erro ao verificar usuário" });
+    }
+  });
+
+  // Webhook para Kiwify
+  app.post("/api/webhook/kiwify", (req, res) => {
+    try {
+      const { order_status, customer } = req.body;
+
+      // Log para debug (opcional)
+      console.log("Webhook Kiwify recebido:", { order_status, email: customer?.email });
+
+      // Kiwify envia 'paid' ou 'approved' dependendo da versão/configuração
+      if (order_status === "paid" || order_status === "approved") {
+        const email = customer.email.toLowerCase().trim();
+        const name = customer.full_name || email.split('@')[0];
+
+        // Verifica se o usuário já existe
+        const existingUser = db.prepare("SELECT * FROM users WHERE email = ?").get(email);
+
+        if (!existingUser) {
+          db.prepare("INSERT INTO users (email, name) VALUES (?, ?)").run(email, name);
+          console.log(`Novo comprador liberado: ${email}`);
+        } else {
+          console.log(`Comprador já possuía acesso: ${email}`);
+        }
+      }
+
+      // Sempre retorne 200 para o Kiwify não tentar reenviar
+      res.status(200).send("OK");
+    } catch (err) {
+      console.error("Erro no Webhook Kiwify:", err);
+      res.status(500).send("Internal Server Error");
     }
   });
 
