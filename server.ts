@@ -3,6 +3,10 @@ import { createServer as createViteServer } from "vite";
 import Database from "better-sqlite3";
 import path from "path";
 import { fileURLToPath } from "url";
+import dotenv from "dotenv";
+import webpush from "web-push";
+
+dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -13,62 +17,89 @@ const db = new Database("database.db");
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    email TEXT UNIQUE,
-    name TEXT,
+    email TEXT UNIQUE NOT NULL,
+    name TEXT NOT NULL,
     plan TEXT DEFAULT 'free',
     streak INTEGER DEFAULT 0,
     progress INTEGER DEFAULT 0,
     last_access TEXT
   );
+  CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 
   CREATE TABLE IF NOT EXISTS days (
     id INTEGER PRIMARY KEY,
-    title TEXT,
-    verse TEXT,
-    reflection TEXT,
-    application TEXT,
-    exercise TEXT,
-    declaration TEXT
+    title TEXT NOT NULL,
+    verse TEXT NOT NULL,
+    reflection TEXT NOT NULL,
+    application TEXT NOT NULL,
+    exercise TEXT NOT NULL,
+    declaration TEXT NOT NULL
   );
 
   CREATE TABLE IF NOT EXISTS prayers (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    category TEXT,
-    title TEXT,
-    content TEXT,
-    declaration TEXT
+    category TEXT NOT NULL,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    declaration TEXT NOT NULL
   );
 
   CREATE TABLE IF NOT EXISTS declarations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    content TEXT,
-    reference TEXT
+    content TEXT NOT NULL,
+    reference TEXT NOT NULL
   );
 
   CREATE TABLE IF NOT EXISTS checklists (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER,
-    date TEXT,
-    morning_status TEXT, -- JSON string of checked items
-    night_status TEXT,    -- JSON string of checked items
+    user_id INTEGER NOT NULL,
+    date TEXT NOT NULL,
+    morning_status TEXT DEFAULT '[]',
+    night_status TEXT DEFAULT '[]',
+    mission_status TEXT DEFAULT '{}',
     UNIQUE(user_id, date)
   );
+  CREATE INDEX IF NOT EXISTS idx_checklists_user_date ON checklists(user_id, date);
 
   CREATE TABLE IF NOT EXISTS diary (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER,
-    date TEXT,
+    user_id INTEGER NOT NULL,
+    date TEXT NOT NULL,
     gratitude TEXT,
     learning TEXT,
     UNIQUE(user_id, date)
   );
+  CREATE INDEX IF NOT EXISTS idx_diary_user_date ON diary(user_id, date);
 
   CREATE TABLE IF NOT EXISTS day_reflections (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER,
-    day_id INTEGER,
+    user_id INTEGER NOT NULL,
+    day_id INTEGER NOT NULL,
     content TEXT,
     UNIQUE(user_id, day_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_reflections_user_day ON day_reflections(user_id, day_id);
+
+  CREATE TABLE IF NOT EXISTS push_subscriptions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    subscription TEXT NOT NULL,
+    UNIQUE(user_id, subscription)
+  );
+  CREATE INDEX IF NOT EXISTS idx_push_user ON push_subscriptions(user_id);
+
+  CREATE TABLE IF NOT EXISTS achievements (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL,
+    icon TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS user_achievements (
+    user_id INTEGER NOT NULL,
+    achievement_id TEXT NOT NULL,
+    earned_at TEXT NOT NULL,
+    PRIMARY KEY(user_id, achievement_id)
   );
 `);
 
@@ -167,12 +198,41 @@ if (declCount.count !== 21) {
   });
 }
 
+const achievementCount = db.prepare("SELECT COUNT(*) as count FROM achievements").get() as { count: number };
+if (achievementCount.count === 0) {
+  const insertAchievement = db.prepare("INSERT INTO achievements (id, title, description, icon) VALUES (?, ?, ?, ?)");
+  insertAchievement.run("streak_3", "3 Dias com Deus", "Manteve sua chama acesa por 3 dias seguidos.", "🔥");
+  insertAchievement.run("streak_7", "7 Dias com Deus", "Uma semana inteira de fidelidade e busca.", "🛡️");
+  insertAchievement.run("streak_15", "15 Dias com Deus", "Metade do caminho percorrido com excelência.", "⚔️");
+  insertAchievement.run("streak_30", "Guerreiro da Virada", "Concluiu os 30 dias de transformação total.", "🏆");
+}
+
 async function startServer() {
   const app = express();
   app.use(express.json());
+
+  // Logging middleware for API routes
+  app.use("/api/*", (req, res, next) => {
+    console.log(`[API Request] ${req.method} ${req.originalUrl}`);
+    next();
+  });
+
   const PORT = process.env.PORT || 3000;
 
+  // Web Push Configuration
+  const vapidPublicKey = process.env.VAPID_PUBLIC_KEY || "";
+  const vapidPrivateKey = process.env.VAPID_PRIVATE_KEY || "";
+  const vapidEmail = process.env.VAPID_EMAIL || "mailto:admin@example.com";
+
+  if (vapidPublicKey && vapidPrivateKey) {
+    webpush.setVapidDetails(vapidEmail, vapidPublicKey, vapidPrivateKey);
+  }
+
   // API Routes
+  app.get("/api/health", (req, res) => {
+    res.json({ status: "ok", timestamp: new Date().toISOString() });
+  });
+
   app.get("/api/days", (req, res) => {
     try {
       const days = db.prepare("SELECT * FROM days").all();
@@ -215,11 +275,22 @@ async function startServer() {
 
   app.get("/api/user/:email", (req, res) => {
     try {
-      const email = req.params.email;
-      const user = db.prepare("SELECT * FROM users WHERE email = ?").get(email);
+      const email = req.params.email.toLowerCase().trim();
+      const adminEmail = "fbassistecjari@gmail.com";
+      
+      let user = db.prepare("SELECT * FROM users WHERE email = ?").get(email) as any;
+      
+      // Auto-authorize the admin/developer
+      if (!user && email === adminEmail) {
+        db.prepare("INSERT INTO users (email, name) VALUES (?, ?)").run(email, "Admin");
+        user = db.prepare("SELECT * FROM users WHERE email = ?").get(email);
+      }
       
       if (!user) {
-        return res.status(403).json({ error: "Acesso negado. Este e-mail não possui uma compra ativa." });
+        return res.status(403).json({ 
+          error: "Acesso negado. Este e-mail não possui uma compra ativa.",
+          details: "Se você acabou de comprar, aguarde alguns minutos pela liberação."
+        });
       }
       
       res.json(user);
@@ -264,24 +335,58 @@ async function startServer() {
   app.post("/api/user/progress", (req, res) => {
     try {
       const { email, progress } = req.body;
+      if (!email || progress === undefined) {
+        return res.status(400).json({ error: "Missing email or progress" });
+      }
+
       const user = db.prepare("SELECT * FROM users WHERE email = ?").get(email) as any;
       if (!user) return res.status(404).json({ error: "User not found" });
 
-      const today = new Date().toISOString().split('T')[0];
-      const lastAccess = user.last_access ? user.last_access.split('T')[0] : null;
-      const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
+      const now = new Date();
+      // Consistent local date YYYY-MM-DD
+      const today = new Date(now.getTime() - (now.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
+      
+      // last_access was stored as ISO string, so split('T')[0] is UTC date.
+      // Let's change it to store just the date or be consistent.
+      const lastDate = user.last_access ? user.last_access.split('T')[0] : null;
+      
+      const yesterdayDate = new Date(now.getTime() - (now.getTimezoneOffset() * 60000));
+      yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+      const yesterday = yesterdayDate.toISOString().split('T')[0];
 
-      let newStreak = user.streak;
-      if (lastAccess === today) {
-        newStreak = user.streak;
-      } else if (lastAccess === yesterday) {
-        newStreak = user.streak + 1;
+      let newStreak = user.streak || 0;
+      
+      if (lastDate === today) {
+        // Already completed something today, streak stays the same
+      } else if (lastDate === yesterday || !lastDate) {
+        // Consecutive or first time
+        newStreak = (user.streak || 0) + 1;
       } else {
+        // Gap detected, reset to 1
         newStreak = 1;
       }
 
+      // Update user with the current timestamp (ISO) but we compare only the date part
       db.prepare("UPDATE users SET progress = ?, streak = ?, last_access = ? WHERE email = ?")
-        .run(progress, newStreak, new Date().toISOString(), email);
+        .run(progress, newStreak, now.toISOString(), email);
+
+      // Check for achievements - award all that apply up to current streak
+      const achievements = db.prepare("SELECT id, title FROM achievements").all() as any[];
+      const thresholds: Record<string, number> = {
+        "streak_3": 3,
+        "streak_7": 7,
+        "streak_15": 15,
+        "streak_30": 30
+      };
+
+      achievements.forEach(ach => {
+        const threshold = thresholds[ach.id];
+        if (threshold && newStreak >= threshold) {
+          db.prepare("INSERT OR IGNORE INTO user_achievements (user_id, achievement_id, earned_at) VALUES (?, ?, ?)")
+            .run(user.id, ach.id, now.toISOString());
+        }
+      });
+
       res.json({ success: true, streak: newStreak });
     } catch (err) {
       console.error(err);
@@ -289,11 +394,88 @@ async function startServer() {
     }
   });
 
+  app.get("/api/user/:userId/achievements", (req, res) => {
+    try {
+      const achievements = db.prepare(`
+        SELECT a.*, ua.earned_at 
+        FROM achievements a
+        LEFT JOIN user_achievements ua ON a.id = ua.achievement_id AND ua.user_id = ?
+      `).all(req.params.userId);
+      res.json(achievements);
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: "Failed to fetch achievements" });
+    }
+  });
+
+  app.get("/api/push/vapid-public-key", (req, res) => {
+    res.json({ publicKey: vapidPublicKey });
+  });
+
+  app.post("/api/push/subscribe", (req, res) => {
+    try {
+      const { user_id, subscription } = req.body;
+      if (!user_id || !subscription) {
+        return res.status(400).json({ error: "Missing user_id or subscription" });
+      }
+
+      db.prepare(`
+        INSERT INTO push_subscriptions (user_id, subscription)
+        VALUES (?, ?)
+        ON CONFLICT(user_id, subscription) DO NOTHING
+      `).run(user_id, JSON.stringify(subscription));
+
+      res.status(201).json({ success: true });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: "Failed to subscribe" });
+    }
+  });
+
+  app.post("/api/push/send-all", async (req, res) => {
+    try {
+      const { title, body, url } = req.body;
+      const subscriptions = db.prepare("SELECT subscription FROM push_subscriptions").all() as any[];
+      
+      const payload = JSON.stringify({ title, body, url: url || '/' });
+
+      const results = await Promise.allSettled(subscriptions.map(sub => {
+        return webpush.sendNotification(JSON.parse(sub.subscription), payload);
+      }));
+
+      res.json({ success: true, sent: results.filter(r => r.status === 'fulfilled').length });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: "Failed to send notifications" });
+    }
+  });
+
+  app.post("/api/push/test", async (req, res) => {
+    try {
+      const { user_id } = req.body;
+      const subscription = db.prepare("SELECT subscription FROM push_subscriptions WHERE user_id = ? ORDER BY id DESC LIMIT 1").get(user_id) as any;
+      
+      if (!subscription) return res.status(404).json({ error: "Subscription not found" });
+
+      const payload = JSON.stringify({ 
+        title: "Teste de Notificação", 
+        body: "Sua conexão com o Reino está ativa! 🙏", 
+        url: '/' 
+      });
+
+      await webpush.sendNotification(JSON.parse(subscription.subscription), payload);
+      res.json({ success: true });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: "Failed to send test notification" });
+    }
+  });
+
   app.get("/api/checklists/:userId/:date", (req, res) => {
     try {
       const checklist = db.prepare("SELECT * FROM checklists WHERE user_id = ? AND date = ?")
         .get(req.params.userId, req.params.date);
-      res.json(checklist || { morning_status: "[]", night_status: "[]" });
+      res.json(checklist || { morning_status: "[]", night_status: "[]", mission_status: "{}" });
     } catch (err) {
       console.error(err);
       res.status(500).json({ error: "Failed to fetch checklist" });
@@ -302,14 +484,25 @@ async function startServer() {
 
   app.post("/api/checklists", (req, res) => {
     try {
-      const { user_id, date, morning_status, night_status } = req.body;
+      const { user_id, date, morning_status, night_status, mission_status } = req.body;
+      if (!user_id || !date) {
+        return res.status(400).json({ error: "Missing user_id or date" });
+      }
+
       db.prepare(`
-        INSERT INTO checklists (user_id, date, morning_status, night_status)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO checklists (user_id, date, morning_status, night_status, mission_status)
+        VALUES (?, ?, ?, ?, ?)
         ON CONFLICT(user_id, date) DO UPDATE SET
-        morning_status = excluded.morning_status,
-        night_status = excluded.night_status
-      `).run(user_id, date, JSON.stringify(morning_status), JSON.stringify(night_status));
+        morning_status = COALESCE(excluded.morning_status, morning_status),
+        night_status = COALESCE(excluded.night_status, night_status),
+        mission_status = COALESCE(excluded.mission_status, mission_status)
+      `).run(
+        user_id, 
+        date, 
+        morning_status ? JSON.stringify(morning_status) : null, 
+        night_status ? JSON.stringify(night_status) : null,
+        mission_status ? JSON.stringify(mission_status) : null
+      );
       res.json({ success: true });
     } catch (err) {
       console.error(err);
@@ -331,6 +524,10 @@ async function startServer() {
   app.post("/api/diary", (req, res) => {
     try {
       const { user_id, date, gratitude, learning } = req.body;
+      if (!user_id || !date) {
+        return res.status(400).json({ error: "Missing user_id or date" });
+      }
+
       db.prepare(`
         INSERT INTO diary (user_id, date, gratitude, learning)
         VALUES (?, ?, ?, ?)
@@ -359,6 +556,10 @@ async function startServer() {
   app.post("/api/reflections", (req, res) => {
     try {
       const { user_id, day_id, content } = req.body;
+      if (!user_id || !day_id) {
+        return res.status(400).json({ error: "Missing user_id or day_id" });
+      }
+
       db.prepare(`
         INSERT INTO day_reflections (user_id, day_id, content)
         VALUES (?, ?, ?)
@@ -408,7 +609,39 @@ async function startServer() {
 
   app.listen(Number(PORT), "0.0.0.0", () => {
     console.log(`Server running on port ${PORT}`);
+    
+    // Simple scheduler for notifications
+    setInterval(async () => {
+      const now = new Date();
+      const hours = now.getHours();
+      const minutes = now.getMinutes();
+
+      // Morning: 08:00
+      if (hours === 8 && minutes === 0) {
+        await sendAllNotifications("Seu devocional de hoje está pronto.", "Venha renovar suas forças!");
+      }
+      // Afternoon: 15:00
+      if (hours === 15 && minutes === 0) {
+        await sendAllNotifications("Pare 1 minuto.", "Deus quer falar com você agora.");
+      }
+      // Night: 21:00
+      if (hours === 21 && minutes === 0) {
+        await sendAllNotifications("Antes de dormir...", "Escreva uma gratidão pelo seu dia.");
+      }
+    }, 60000); // Check every minute
   });
+
+  async function sendAllNotifications(title: string, body: string) {
+    try {
+      const subscriptions = db.prepare("SELECT subscription FROM push_subscriptions").all() as any[];
+      const payload = JSON.stringify({ title, body, url: '/' });
+      await Promise.allSettled(subscriptions.map(sub => {
+        return webpush.sendNotification(JSON.parse(sub.subscription), payload);
+      }));
+    } catch (err) {
+      console.error("Scheduled notification error:", err);
+    }
+  }
 }
 
 startServer();

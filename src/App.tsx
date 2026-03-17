@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, Component } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Flame, 
@@ -16,9 +16,14 @@ import {
   Star,
   BookOpen,
   User as UserIcon,
+  Bell,
   Share2,
   Trophy,
   MessageSquare,
+  Circle,
+  Target,
+  Award,
+  Zap,
   Save,
   Check,
   Volume2,
@@ -35,12 +40,63 @@ import { GoogleGenAI, Modality } from "@google/genai";
 
 // --- Components ---
 
+class ErrorBoundary extends Component<{ children: React.ReactNode }, { hasError: boolean; error: Error | null }> {
+  state = { hasError: false, error: null };
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    console.error("ErrorBoundary caught an error", error, errorInfo);
+  }
+
+  render() {
+    const { hasError, error } = this.state;
+    if (hasError) {
+      return (
+        <div className="min-h-screen flex flex-col items-center justify-center p-8 text-center bg-zinc-50 dark:bg-zinc-950">
+          <div className="w-16 h-16 bg-red-500/10 text-red-500 rounded-full flex items-center justify-center mb-6">
+            <X className="w-8 h-8" />
+          </div>
+          <h2 className="text-2xl font-bold mb-4 dark:text-white">Ops! Algo deu errado.</h2>
+          <p className="text-zinc-500 dark:text-zinc-400 mb-8 max-w-xs mx-auto">
+            Ocorreu um erro inesperado. Por favor, tente recarregar o aplicativo.
+          </p>
+          <button 
+            onClick={() => window.location.reload()}
+            className="px-8 py-3 bg-gold-500 text-white rounded-full font-bold shadow-lg shadow-gold-500/20"
+          >
+            Recarregar App
+          </button>
+          {process.env.NODE_ENV === 'development' && (
+            <pre className="mt-8 p-4 bg-zinc-100 dark:bg-zinc-900 rounded text-left text-xs overflow-auto max-w-full text-red-500">
+              {error?.toString()}
+            </pre>
+          )}
+        </div>
+      );
+    }
+    return (this as any).props.children;
+  }
+}
+
 const AudioButton = ({ text, className = "" }: { text: string; className?: string }) => {
   const [loading, setLoading] = useState(false);
   const [playing, setPlaying] = useState(false);
+  const audioRef = React.useRef<{ context: AudioContext; source: AudioBufferSourceNode } | null>(null);
 
-  const handlePlay = async () => {
-    if (loading || playing) return;
+  const handleToggle = async () => {
+    if (loading) return;
+    
+    if (playing && audioRef.current) {
+      audioRef.current.source.stop();
+      audioRef.current.context.close();
+      audioRef.current = null;
+      setPlaying(false);
+      return;
+    }
+
     setLoading(true);
     try {
       const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
@@ -59,14 +115,19 @@ const AudioButton = ({ text, className = "" }: { text: string; className?: strin
 
       const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
       if (base64Audio) {
-        const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+        const AudioContextClass = (window.AudioContext || (window as any).webkitAudioContext);
+        const audioContext = new AudioContextClass({ sampleRate: 24000 });
+        
+        if (audioContext.state === 'suspended') {
+          await audioContext.resume();
+        }
+
         const binaryString = atob(base64Audio);
         const bytes = new Uint8Array(binaryString.length);
         for (let i = 0; i < binaryString.length; i++) {
           bytes[i] = binaryString.charCodeAt(i);
         }
         
-        // Gemini TTS returns raw 16-bit PCM (L16)
         const int16Array = new Int16Array(bytes.buffer);
         const float32Array = new Float32Array(int16Array.length);
         for (let i = 0; i < int16Array.length; i++) {
@@ -81,8 +142,11 @@ const AudioButton = ({ text, className = "" }: { text: string; className?: strin
         source.connect(audioContext.destination);
         source.onended = () => {
           setPlaying(false);
+          audioRef.current = null;
           audioContext.close();
         };
+        
+        audioRef.current = { context: audioContext, source };
         setPlaying(true);
         source.start();
       }
@@ -95,11 +159,11 @@ const AudioButton = ({ text, className = "" }: { text: string; className?: strin
 
   return (
     <button 
-      onClick={handlePlay}
-      className={`p-2 rounded-full transition-all ${playing ? 'bg-gold-500 text-white' : 'bg-gold-500/10 text-gold-500 hover:bg-gold-500/20'} ${className}`}
+      onClick={handleToggle}
+      className={`p-2 rounded-full transition-all ${playing ? 'bg-red-500 text-white' : 'bg-gold-500/10 text-gold-500 hover:bg-gold-500/20'} ${className}`}
       disabled={loading}
     >
-      {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Volume2 className="w-4 h-4" />}
+      {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : playing ? <X className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
     </button>
   );
 };
@@ -346,6 +410,16 @@ const HomePage = ({
   onToggleTheme: () => void;
 }) => {
   const [dailyDeclaration, setDailyDeclaration] = useState<Declaration | null>(null);
+  const [mission, setMission] = useState({
+    devotional: false,
+    prayer: false,
+    gratitude: false,
+    reflection: false
+  });
+
+  const allDone = mission.devotional && mission.prayer && mission.gratitude && mission.reflection;
+  const progressPercent = (user.progress / 30) * 100;
+  const today = new Date(new Date().getTime() - (new Date().getTimezoneOffset() * 60000)).toISOString().split('T')[0];
 
   useEffect(() => {
     fetch('/api/declarations')
@@ -355,61 +429,141 @@ const HomePage = ({
         setDailyDeclaration(currentDayDecl);
       })
       .catch(err => console.error(err));
-  }, [user.progress]);
+
+    // Load mission status
+    fetch(`/api/checklists/${user.id}/${today}`)
+      .then(res => res.json())
+      .then(data => {
+        if (data && data.mission_status) {
+          try {
+            const status = typeof data.mission_status === 'string' ? JSON.parse(data.mission_status) : data.mission_status;
+            if (Object.keys(status).length > 0) {
+              setMission(status);
+            }
+          } catch (e) {
+            console.error("Error parsing mission status", e);
+          }
+        }
+      });
+  }, [user.progress, user.id, today]);
+
+  const updateMission = (newMission: typeof mission) => {
+    setMission(newMission);
+    fetch('/api/checklists', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_id: user.id, date: today, mission_status: newMission })
+    });
+  };
+
+  const shareProgress = () => {
+    const text = `Estou no dia ${user.progress} da minha Virada Espiritual 🙏🔥 Junte-se a mim!`;
+    const url = window.location.href;
+    
+    if (navigator.share) {
+      navigator.share({
+        title: 'Virada Espiritual 30D',
+        text: text,
+        url: url,
+      });
+    } else {
+      window.open(`https://wa.me/?text=${encodeURIComponent(text + ' ' + url)}`);
+    }
+  };
 
   return (
     <div className="min-h-screen pb-32">
       <header className="p-8 flex justify-between items-center">
         <div className="space-y-1">
-          <p className="text-[10px] uppercase tracking-[0.3em] font-bold opacity-40">Bem-vindo à sua jornada</p>
-          <h2 className="text-2xl md:text-3xl display-bold">Olá, <span className="serif-italic gold-text">{user.name}</span></h2>
+          <p className="text-[10px] uppercase tracking-[0.3em] font-bold opacity-40">Bom dia, Deus quer falar com você hoje.</p>
+          <h2 className="text-2xl md:text-3xl display-bold">Olá, <span className="serif-italic gold-text">{user.name.split(' ')[0]}</span></h2>
         </div>
         <div className="flex items-center gap-4">
           <button onClick={onToggleTheme} className="p-3 rounded-full border border-zinc-200 dark:border-white/10 glass-card">
             {theme === 'dark' ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
           </button>
-          <div className="flex items-center gap-2 glass-card px-4 py-2 rounded-full border border-zinc-200 dark:border-white/5">
-            <Flame className="w-5 h-5 text-orange-500 fill-orange-500" />
-            <span className="display-bold text-lg">{user.streak}</span>
-          </div>
         </div>
       </header>
 
       <main className="px-6 space-y-8">
-        {/* Progress Card */}
+        {/* Daily Mission */}
         <section className="glass-card p-8 space-y-6">
-          <div className="flex justify-between items-end">
-            <div className="space-y-1">
-              <span className="text-5xl display-bold">{Math.round((user.progress / 30) * 100)}%</span>
-              <p className="text-xs uppercase tracking-widest opacity-50">Progresso Total</p>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Zap className="w-5 h-5 text-gold-500" />
+              <h3 className="font-bold uppercase tracking-widest text-sm">Missão de Hoje</h3>
             </div>
-            <div className="text-right space-y-1">
-              <span className="text-2xl display-bold text-gold-500">
-                {user.progress >= 30 ? "Concluído" : `Dia ${user.progress + 1}`}
+            {allDone && (
+              <span className="text-[10px] bg-emerald-500/20 text-emerald-500 px-2 py-1 rounded-full font-bold uppercase tracking-tighter">
+                ✔ Dia Concluído
               </span>
-              <p className="text-[10px] uppercase tracking-widest opacity-50">Status Atual</p>
-            </div>
+            )}
           </div>
-          <ProgressBar current={user.progress} total={30} />
-          <div className="flex justify-between text-[10px] uppercase tracking-widest font-bold opacity-40">
-            <span>Início</span>
-            <span>Destino</span>
+
+          <div className="space-y-4">
+            {[
+              { id: 'devotional', label: 'Ler o devocional', icon: BookOpen },
+              { id: 'prayer', label: 'Fazer oração guiada', icon: Heart },
+              { id: 'gratitude', label: 'Escrever uma gratidão', icon: Star },
+              { id: 'reflection', label: 'Refletir no diário espiritual', icon: MessageSquare },
+            ].map((item) => (
+              <button
+                key={item.id}
+                onClick={() => {
+                  const newMission = { ...mission, [item.id]: !mission[item.id as keyof typeof mission] };
+                  updateMission(newMission);
+                }}
+                className={`w-full flex items-center justify-between p-5 rounded-2xl border transition-all ${
+                  mission[item.id as keyof typeof mission] 
+                    ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-500' 
+                    : 'bg-white/5 border-white/5 text-white/60 hover:bg-white/10'
+                }`}
+              >
+                <div className="flex items-center gap-4">
+                  <item.icon className="w-5 h-5" />
+                  <span className="text-sm font-bold uppercase tracking-widest">{item.label}</span>
+                </div>
+                {mission[item.id as keyof typeof mission] ? (
+                  <CheckCircle2 className="w-6 h-6" />
+                ) : (
+                  <Circle className="w-6 h-6 opacity-20" />
+                )}
+              </button>
+            ))}
           </div>
-          
-          {user.progress < 30 ? (
-            <Button 
-              variant="gold" 
-              className="w-full py-5 text-lg font-medium shadow-2xl shadow-gold-500/20 flex items-center justify-center gap-3 group"
-              onClick={() => onStartDay(user.progress + 1)}
+
+          {user.progress < 30 && allDone && (
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
             >
-              Iniciar Dia {user.progress + 1}
-              <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
-            </Button>
-          ) : (
-            <div className="p-6 bg-gold-500/5 border border-gold-500/20 rounded-2xl text-center">
-              <p className="gold-text font-bold text-lg">Jornada Concluída com Sucesso!</p>
-            </div>
+              <Button 
+                variant="gold" 
+                className="w-full py-6 text-xl font-medium shadow-2xl shadow-gold-500/20 flex items-center justify-center gap-3 group"
+                onClick={() => onStartDay(user.progress + 1)}
+              >
+                Iniciar Dia {user.progress + 1}
+                <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
+              </Button>
+            </motion.div>
           )}
+        </section>
+
+        {/* Viral Sharing */}
+        <section className="glass-card p-8 bg-gradient-to-br from-gold-500/10 to-transparent border-gold-500/20 flex flex-col items-center text-center gap-6">
+          <div className="w-16 h-16 rounded-full bg-gold-500/20 flex items-center justify-center text-gold-500">
+            <Share2 className="w-8 h-8" />
+          </div>
+          <div className="space-y-2">
+            <h4 className="font-bold uppercase tracking-widest text-sm">Inspirar Outros</h4>
+            <p className="text-xs text-white/40 leading-relaxed">Compartilhe sua luz e ajude outros a começarem a virada espiritual.</p>
+          </div>
+          <button 
+            onClick={shareProgress}
+            className="w-full py-4 rounded-2xl border border-gold-500/30 text-gold-500 text-xs font-bold uppercase tracking-widest hover:bg-gold-500/10 transition-colors"
+          >
+            Compartilhar Progresso
+          </button>
         </section>
 
         {/* Action Grid */}
@@ -440,27 +594,6 @@ const HomePage = ({
           </button>
         </div>
 
-        {/* Daily Verse */}
-        {dailyDeclaration && (
-          <section className="glass-card p-8 relative overflow-hidden group">
-            <Quote className="absolute -top-4 -left-4 w-24 h-24 opacity-[0.03] rotate-12" />
-            <div className="relative z-10 space-y-6">
-              <div className="flex justify-between items-start">
-                <p className="serif-italic text-2xl leading-relaxed italic opacity-90 flex-1">
-                  "{dailyDeclaration.content}"
-                </p>
-                <AudioButton text={dailyDeclaration.content} className="ml-4" />
-              </div>
-              <div className="flex items-center gap-3">
-                <div className="h-px w-8 bg-gold-500/30" />
-                <span className="text-[10px] uppercase tracking-widest font-bold opacity-50">
-                  {dailyDeclaration.reference}
-                </span>
-              </div>
-            </div>
-          </section>
-        )}
-
         {/* Emergency Button */}
         <button 
           onClick={onOpenCrisis}
@@ -469,6 +602,51 @@ const HomePage = ({
           <Heart className="w-4 h-4" />
           Botão de Emergência
         </button>
+
+        {/* Stats Cards - MOVED TO BOTTOM */}
+        <div className="grid grid-cols-2 gap-4">
+          <div className="glass-card p-6 flex flex-col gap-2 relative overflow-hidden group">
+            <div className="absolute -right-2 -top-2 opacity-10 group-hover:scale-110 transition-transform">
+              <Flame className="w-16 h-16 text-orange-500" />
+            </div>
+            <span className="text-[10px] uppercase tracking-widest font-bold opacity-40">Streak</span>
+            <div className="flex items-center gap-2">
+              <span className="text-2xl display-bold">🔥 {user.streak}</span>
+            </div>
+            <span className="text-[10px] opacity-60">Dias com Deus</span>
+          </div>
+          <div className="glass-card p-6 flex flex-col gap-2 relative overflow-hidden group">
+            <div className="absolute -right-2 -top-2 opacity-10 group-hover:scale-110 transition-transform">
+              <Target className="w-16 h-16 text-gold-500" />
+            </div>
+            <span className="text-[10px] uppercase tracking-widest font-bold opacity-40">Jornada</span>
+            <div className="flex items-center gap-2">
+              <span className="text-2xl display-bold">{user.progress}/30</span>
+            </div>
+            <span className="text-[10px] opacity-60">Dias Concluídos</span>
+          </div>
+        </div>
+
+        {/* Progress Bar - MOVED TO BOTTOM */}
+        <section className="glass-card p-8 space-y-6">
+          <div className="flex justify-between items-end">
+            <div className="space-y-1">
+              <span className="text-5xl display-bold">{Math.round(progressPercent)}%</span>
+              <p className="text-xs uppercase tracking-widest opacity-50">Progresso Total</p>
+            </div>
+            <div className="text-right space-y-1">
+              <span className="text-2xl display-bold text-gold-500">
+                {user.progress >= 30 ? "Concluído" : `Dia ${user.progress + 1}`}
+              </span>
+              <p className="text-[10px] uppercase tracking-widest opacity-50">Status Atual</p>
+            </div>
+          </div>
+          <ProgressBar current={user.progress} total={30} />
+          <div className="flex justify-between text-[10px] uppercase tracking-widest font-bold opacity-40">
+            <span>Início</span>
+            <span>Destino</span>
+          </div>
+        </section>
       </main>
     </div>
   );
@@ -808,12 +986,88 @@ const CongratulationsPage = ({ onBack }: { onBack: () => void }) => {
   );
 };
 
-const ProfilePage = ({ user, onBack, onLogout }: { user: User; onBack: () => void; onLogout: () => void }) => {
+const ProfilePage = ({ user, achievements, onBack, onLogout }: { user: User; achievements: any[]; onBack: () => void; onLogout: () => void }) => {
+  const [pushStatus, setPushStatus] = useState<'default' | 'granted' | 'denied' | 'loading'>('loading');
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if ('Notification' in window) {
+      setPushStatus(Notification.permission as any);
+    }
+  }, []);
+
+  const urlBase64ToUint8Array = (base64String: string) => {
+    const padding = '='.repeat((4 - base64String.length % 4) % 4);
+    const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+    const rawData = window.atob(base64);
+    const outputArray = new Uint8Array(rawData.length);
+    for (let i = 0; i < rawData.length; ++i) {
+      outputArray[i] = rawData.charCodeAt(i);
+    }
+    return outputArray;
+  };
+
+  const subscribeToPush = async () => {
+    setLoading(true);
+    try {
+      const permission = await Notification.requestPermission();
+      setPushStatus(permission as any);
+      
+      if (permission !== 'granted') return;
+
+      const registration = await navigator.serviceWorker.register('/sw.js');
+      await navigator.serviceWorker.ready;
+
+      const res = await fetch('/api/push/vapid-public-key');
+      const { publicKey } = await res.json();
+
+      if (!publicKey) {
+        alert('Configuração de notificações pendente no servidor.');
+        return;
+      }
+
+      const subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(publicKey)
+      });
+
+      await fetch('/api/push/subscribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: user.id, subscription: JSON.stringify(subscription) })
+      });
+
+      alert('Notificações ativadas com sucesso! 🙏');
+    } catch (error) {
+      console.error('Push subscription error:', error);
+      alert('Erro ao ativar notificações. Verifique as permissões do navegador.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const sendTestNotification = async () => {
+    try {
+      const res = await fetch('/api/push/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: user.id })
+      });
+      if (res.ok) {
+        alert('Notificação de teste enviada! Verifique seu dispositivo.');
+      } else {
+        alert('Erro ao enviar teste. Você está inscrito?');
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
   return (
     <motion.div 
       initial={{ opacity: 0, x: 20 }}
       animate={{ opacity: 1, x: 0 }}
-      className="min-h-screen pb-12"
+      className="min-h-screen pb-32"
     >
       <header className="p-6 flex items-center gap-4 sticky top-0 z-50 nav-blur">
         <button onClick={onBack} className="p-2 -ml-2 opacity-60 hover:opacity-100 transition-opacity">
@@ -835,7 +1089,7 @@ const ProfilePage = ({ user, onBack, onLogout }: { user: User; onBack: () => voi
 
         <div className="grid grid-cols-2 gap-4">
           <div className="glass-card p-8 text-center space-y-2">
-            <Trophy className="w-8 h-8 mx-auto text-gold-500 opacity-50" />
+            <Target className="w-8 h-8 mx-auto text-gold-500 opacity-50" />
             <div className="text-4xl display-bold">{user.progress}</div>
             <div className="text-[10px] uppercase tracking-widest font-bold opacity-40">Dias Concluídos</div>
           </div>
@@ -846,9 +1100,60 @@ const ProfilePage = ({ user, onBack, onLogout }: { user: User; onBack: () => voi
           </div>
         </div>
 
+        {/* Achievements */}
+        <div className="space-y-6">
+          <h3 className="text-[10px] uppercase tracking-[0.3em] font-bold opacity-40 ml-1">Conquistas</h3>
+          <div className="grid grid-cols-2 gap-4">
+            {achievements.map((achievement) => (
+              <div 
+                key={achievement.id}
+                className={`glass-card p-6 flex flex-col items-center text-center gap-3 transition-all ${
+                  achievement.earned_at ? 'opacity-100' : 'opacity-20 grayscale'
+                }`}
+              >
+                <span className="text-4xl">{achievement.icon}</span>
+                <div className="space-y-1">
+                  <span className="text-[10px] font-bold uppercase tracking-widest leading-tight block">{achievement.title}</span>
+                  {achievement.earned_at && (
+                    <span className="text-[8px] text-emerald-500 font-bold uppercase tracking-tighter">Conquistado</span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
         <div className="space-y-6">
           <h3 className="text-[10px] uppercase tracking-[0.3em] font-bold opacity-40 ml-1">Configurações</h3>
           <div className="space-y-3">
+            <button 
+              onClick={subscribeToPush}
+              disabled={pushStatus === 'granted' || loading}
+              className="w-full glass-card p-6 text-left flex items-center justify-between group disabled:opacity-50"
+            >
+              <div className="flex items-center gap-4">
+                <div className="w-10 h-10 rounded-xl bg-gold-500/10 flex items-center justify-center text-gold-500">
+                  {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Bell className="w-5 h-5" />}
+                </div>
+                <div>
+                  <span className="font-bold uppercase tracking-widest text-sm block">Notificações</span>
+                  <span className="text-[10px] opacity-40 uppercase tracking-widest font-bold">
+                    {pushStatus === 'granted' ? 'Ativadas' : pushStatus === 'denied' ? 'Bloqueadas' : 'Ativar Lembretes'}
+                  </span>
+                </div>
+              </div>
+              {pushStatus !== 'granted' && !loading && <ChevronRight className="w-5 h-5 opacity-20 group-hover:translate-x-1 transition-all" />}
+            </button>
+
+            {pushStatus === 'granted' && (
+              <button 
+                onClick={sendTestNotification}
+                className="w-full py-4 rounded-2xl border border-white/10 text-white/40 text-[10px] font-bold uppercase tracking-widest hover:bg-white/5 transition-all"
+              >
+                Enviar Notificação de Teste
+              </button>
+            )}
+
             <button onClick={onLogout} className="w-full glass-card p-6 text-left text-red-500 flex items-center justify-between group">
               <div className="flex items-center gap-4">
                 <div className="w-10 h-10 rounded-xl bg-red-500/10 flex items-center justify-center">
@@ -868,7 +1173,7 @@ const ProfilePage = ({ user, onBack, onLogout }: { user: User; onBack: () => voi
 const ChecklistPage = ({ userId, onBack }: { userId: number; onBack: () => void }) => {
   const [morning, setMorning] = useState<string[]>([]);
   const [night, setNight] = useState<string[]>([]);
-  const today = new Date().toISOString().split('T')[0];
+  const today = new Date(new Date().getTime() - (new Date().getTimezoneOffset() * 60000)).toISOString().split('T')[0];
 
   useEffect(() => {
     if (!userId || !today) return;
@@ -876,8 +1181,8 @@ const ChecklistPage = ({ userId, onBack }: { userId: number; onBack: () => void 
       .then(res => res.ok ? res.json() : Promise.reject('Failed to load checklist'))
       .then(data => {
         if (data) {
-          setMorning(JSON.parse(data.morning_status || "[]"));
-          setNight(JSON.parse(data.night_status || "[]"));
+          setMorning(typeof data.morning_status === 'string' ? JSON.parse(data.morning_status || "[]") : (data.morning_status || []));
+          setNight(typeof data.night_status === 'string' ? JSON.parse(data.night_status || "[]") : (data.night_status || []));
         }
       })
       .catch(err => console.error(err));
@@ -980,7 +1285,7 @@ const DiaryPage = ({ userId, onBack }: { userId: number; onBack: () => void }) =
   const [gratitude, setGratitude] = useState('');
   const [learning, setLearning] = useState('');
   const [saved, setSaved] = useState(false);
-  const today = new Date().toISOString().split('T')[0];
+  const today = new Date(new Date().getTime() - (new Date().getTimezoneOffset() * 60000)).toISOString().split('T')[0];
 
   useEffect(() => {
     if (!userId || !today) return;
@@ -1089,8 +1394,25 @@ export default function App() {
   const [view, setView] = useState<'login' | 'home' | 'day' | 'crisis' | 'checklist' | 'declarations' | 'diary' | 'profile' | 'congratulations'>('login');
   const [user, setUser] = useState<User | null>(null);
   const [currentDay, setCurrentDay] = useState<Day | null>(null);
+  const [achievements, setAchievements] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [theme, setTheme] = useState<'light' | 'dark'>('dark');
+
+  useEffect(() => {
+    if (user) {
+      fetchAchievements();
+    }
+  }, [user]);
+
+  const fetchAchievements = async () => {
+    try {
+      const res = await fetch(`/api/user/${user?.id}/achievements`);
+      const data = await res.json();
+      setAchievements(data);
+    } catch (err) {
+      console.error(err);
+    }
+  };
 
   useEffect(() => {
     const savedTheme = localStorage.getItem('app_theme') as 'light' | 'dark';
@@ -1116,15 +1438,16 @@ export default function App() {
     if (!email) return;
     setLoading(true);
     try {
-      const res = await fetch(`/api/user/${encodeURIComponent(email)}`);
+      const url = `/api/user/${encodeURIComponent(email)}`;
+      const res = await fetch(url);
       const contentType = res.headers.get("content-type");
       
       if (!res.ok) {
         if (contentType && contentType.includes("application/json")) {
           const errorData = await res.json();
-          throw new Error(errorData.error || 'Falha no login');
+          throw new Error(errorData.error || `Erro ${res.status}`);
         } else {
-          throw new Error(`Erro no servidor (${res.status}). Por favor, tente novamente.`);
+          throw new Error(`Erro de conexão (${res.status}) em ${url}. Verifique seu e-mail ou tente novamente.`);
         }
       }
       
@@ -1147,10 +1470,11 @@ export default function App() {
   const startDay = async (dayId: number) => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/days/${encodeURIComponent(dayId)}`);
+      const url = `/api/days/${encodeURIComponent(dayId)}`;
+      const res = await fetch(url);
       const contentType = res.headers.get("content-type");
 
-      if (!res.ok) throw new Error(`Falha ao carregar o dia (${res.status})`);
+      if (!res.ok) throw new Error(`Falha ao carregar o dia (${res.status}) em ${url}`);
       
       if (contentType && contentType.includes("application/json")) {
         const dayData = await res.json();
@@ -1191,6 +1515,10 @@ export default function App() {
       const progData = await progRes.json();
       
       setUser({ ...user, progress: newProgress, streak: progData.streak ?? user.streak });
+      
+      // Re-fetch achievements to show new medals immediately
+      fetchAchievements();
+
       if (newProgress === 30) {
         setView('congratulations');
       } else {
@@ -1214,65 +1542,68 @@ export default function App() {
   }
 
   return (
-    <div className="max-w-md mx-auto min-h-screen shadow-2xl shadow-black/20 dark:shadow-white/5">
-      <AnimatePresence mode="wait">
-        {view === 'login' && <LoginPage onLogin={handleLogin} theme={theme} onToggleTheme={toggleTheme} />}
-        {view === 'home' && user && (
-          <HomePage 
-            user={user} 
-            onStartDay={startDay}
-            onOpenCrisis={() => setView('crisis')}
-            onOpenChecklist={() => setView('checklist')}
-            onOpenDeclarations={() => setView('declarations')} 
-            theme={theme}
-            onToggleTheme={toggleTheme}
-          />
-        )}
-        {view === 'day' && currentDay && user && (
-          <DayDetail 
-            day={currentDay} 
-            userId={user.id}
-            onComplete={completeDay} 
-            onBack={() => setView('home')} 
-          />
-        )}
-        {view === 'crisis' && <CrisisMode onBack={() => setView('home')} />}
-        {view === 'declarations' && <DeclarationsPage onBack={() => setView('home')} />}
-        {view === 'checklist' && <ChecklistPage userId={user.id} onBack={() => setView('home')} />}
-        {view === 'diary' && <DiaryPage userId={user.id} onBack={() => setView('home')} />}
-        {view === 'congratulations' && <CongratulationsPage onBack={() => setView('home')} />}
-        {view === 'profile' && <ProfilePage user={user} onBack={() => setView('home')} onLogout={() => {
-          localStorage.removeItem('user_email');
-          setView('login');
-        }} />}
-      </AnimatePresence>
+    <ErrorBoundary>
+      <div className="max-w-md mx-auto min-h-screen shadow-2xl shadow-black/20 dark:shadow-white/5">
+        <AnimatePresence mode="wait">
+          {view === 'login' && <LoginPage onLogin={handleLogin} theme={theme} onToggleTheme={toggleTheme} />}
+          {view === 'home' && user && (
+            <HomePage 
+              user={user} 
+              onStartDay={startDay}
+              onOpenCrisis={() => setView('crisis')}
+              onOpenChecklist={() => setView('checklist')}
+              onOpenDeclarations={() => setView('declarations')} 
+              theme={theme}
+              onToggleTheme={toggleTheme}
+            />
+          )}
+          {view === 'day' && currentDay && user && (
+            <DayDetail 
+              day={currentDay} 
+              userId={user.id}
+              onComplete={completeDay} 
+              onBack={() => setView('home')} 
+            />
+          )}
+          {view === 'crisis' && <CrisisMode onBack={() => setView('home')} />}
+          {view === 'declarations' && <DeclarationsPage onBack={() => setView('home')} />}
+          {view === 'checklist' && user && <ChecklistPage userId={user.id} onBack={() => setView('home')} />}
+          {view === 'diary' && user && <DiaryPage userId={user.id} onBack={() => setView('home')} />}
+          {view === 'congratulations' && <CongratulationsPage onBack={() => setView('home')} />}
+          {view === 'profile' && user && <ProfilePage user={user} achievements={achievements} onBack={() => setView('home')} onLogout={() => {
+            localStorage.removeItem('user_email');
+            setUser(null);
+            setView('login');
+          }} />}
+        </AnimatePresence>
 
-      {/* Navigation Bar (only on home) */}
-      {['home', 'diary', 'profile'].includes(view) && (
-        <nav className="fixed bottom-0 left-0 right-0 max-w-md mx-auto nav-blur px-8 py-4 flex justify-between items-center z-20">
-          <button 
-            onClick={() => setView('home')}
-            className={`${view === 'home' ? 'text-gold-500' : 'opacity-40'} flex flex-col items-center gap-1`}
-          >
-            <Calendar className="w-6 h-6" />
-            <span className="text-[10px] font-bold uppercase">Jornada</span>
-          </button>
-          <button 
-            onClick={() => setView('diary')}
-            className={`${view === 'diary' ? 'text-gold-500' : 'opacity-40'} flex flex-col items-center gap-1`}
-          >
-            <BookOpen className="w-6 h-6" />
-            <span className="text-[10px] font-bold uppercase">Diário</span>
-          </button>
-          <button 
-            onClick={() => setView('profile')}
-            className={`${view === 'profile' ? 'text-gold-500' : 'opacity-40'} flex flex-col items-center gap-1`}
-          >
-            <UserIcon className="w-6 h-6" />
-            <span className="text-[10px] font-bold uppercase">Perfil</span>
-          </button>
-        </nav>
-      )}
-    </div>
+        {/* Navigation Bar (only on home) */}
+        {['home', 'diary', 'profile'].includes(view) && (
+          <nav className="fixed bottom-0 left-0 right-0 max-w-md mx-auto nav-blur px-8 py-4 flex justify-between items-center z-20">
+            <button 
+              onClick={() => setView('home')}
+              className={`${view === 'home' ? 'text-gold-500' : 'opacity-40'} flex flex-col items-center gap-1`}
+            >
+              <Calendar className="w-6 h-6" />
+              <span className="text-[10px] font-bold uppercase">Jornada</span>
+            </button>
+            <button 
+              onClick={() => setView('diary')}
+              className={`${view === 'diary' ? 'text-gold-500' : 'opacity-40'} flex flex-col items-center gap-1`}
+            >
+              <BookOpen className="w-6 h-6" />
+              <span className="text-[10px] font-bold uppercase">Diário</span>
+            </button>
+            <button 
+              onClick={() => setView('profile')}
+              className={`${view === 'profile' ? 'text-gold-500' : 'opacity-40'} flex flex-col items-center gap-1`}
+            >
+              <UserIcon className="w-6 h-6" />
+              <span className="text-[10px] font-bold uppercase">Perfil</span>
+            </button>
+          </nav>
+        )}
+      </div>
+    </ErrorBoundary>
   );
 }
