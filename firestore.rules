@@ -109,27 +109,28 @@ service cloud.firestore {
 
     function isValidUser(data) {
       return data.keys().hasAll(['id', 'email', 'name']) &&
-             data.id is string && data.id.size() > 0 &&
-             data.email is string && isValidEmail(data.email) &&
+             data.id is string && data.id.size() > 0 && data.id.size() < 128 &&
+             data.email is string && isValidEmail(data.email) && data.email.size() < 256 &&
              data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
-             (!('plan' in data) || data.plan in ['free', 'premium']) &&
+             (!('plan' in data) || (data.plan in ['free', 'premium'])) &&
              (!('streak' in data) || data.streak is int) &&
              (!('progress' in data) || data.progress is int) &&
-             (!('last_access' in data) || isValidDateTimeString(data.last_access));
+             (!('last_access' in data) || isValidDateTimeString(data.last_access)) &&
+             (!('role' in data) || (data.role in ['user', 'admin']));
     }
 
     function isValidChecklist(data) {
       return data.keys().hasAll(['user_id', 'date']) &&
-             data.user_id is string &&
+             data.user_id is string && data.user_id.size() < 128 &&
              isValidDateString(data.date) &&
-             (!('morning_status' in data) || data.morning_status is list) &&
-             (!('night_status' in data) || data.night_status is list) &&
-             (!('mission_status' in data) || data.mission_status is map);
+             (!('morning_status' in data) || (data.morning_status is list && data.morning_status.size() < 20)) &&
+             (!('night_status' in data) || (data.night_status is list && data.night_status.size() < 20)) &&
+             (!('mission_status' in data) || (data.mission_status is map && data.mission_status.keys().size() < 20));
     }
 
     function isValidDiary(data) {
       return data.keys().hasAll(['user_id', 'date']) &&
-             data.user_id is string &&
+             data.user_id is string && data.user_id.size() < 128 &&
              isValidDateString(data.date) &&
              (!('gratitude' in data) || (data.gratitude is string && data.gratitude.size() < 2000)) &&
              (!('learning' in data) || (data.learning is string && data.learning.size() < 2000));
@@ -137,15 +138,15 @@ service cloud.firestore {
 
     function isValidReflection(data) {
       return data.keys().hasAll(['user_id', 'day_id']) &&
-             data.user_id is string &&
+             data.user_id is string && data.user_id.size() < 128 &&
              data.day_id is int &&
              (!('content' in data) || (data.content is string && data.content.size() < 5000));
     }
 
     function isValidUserAchievement(data) {
       return data.keys().hasAll(['user_id', 'achievement_id', 'earned_at']) &&
-             data.user_id is string &&
-             data.achievement_id is string &&
+             data.user_id is string && data.user_id.size() < 128 &&
+             data.achievement_id is string && data.achievement_id.size() < 128 &&
              isValidDateTimeString(data.earned_at);
     }
 
@@ -155,8 +156,13 @@ service cloud.firestore {
 
     match /users/{userId} {
       allow read: if isOwner(userId) || isAdmin();
-      allow create: if isOwner(userId) && isValidUser(request.resource.data);
-      allow update: if (isOwner(userId) && isValidUser(request.resource.data)) || isAdmin();
+      allow create: if isOwner(userId) && isValidUser(request.resource.data) && 
+                      !('role' in request.resource.data) && // Users cannot set their own role
+                      (!('plan' in request.resource.data) || request.resource.data.plan == 'free'); // Default to free
+      
+      allow update: if (isAdmin() && isValidUser(request.resource.data)) || 
+                      (isOwner(userId) && isValidUser(request.resource.data) && 
+                       (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'plan', 'email', 'id']))); // Owner cannot change these fields
 
       match /checklists/{date} {
         allow read: if isOwner(userId) || isAdmin();

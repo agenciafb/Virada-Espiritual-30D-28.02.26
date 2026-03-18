@@ -1871,6 +1871,14 @@ export default function App() {
 
       if (fUser) {
         try {
+          // Verify with Kiwify backend to ensure access is still active
+          const verifyRes = await fetch(`/api/user/${encodeURIComponent(fUser.email || '')}`);
+          if (!verifyRes.ok) {
+            console.warn("User session active but not authorized in backend. Logging out.");
+            await signOut(auth);
+            return;
+          }
+
           const userRef = doc(db, 'users', fUser.uid);
           
           // Set up real-time listener for user document

@@ -361,6 +361,10 @@ async function startServer() {
         } else {
           console.log(`Comprador já possuía acesso: ${email}`);
         }
+      } else if (order_status === "refunded" || order_status === "chargedback" || order_status === "canceled") {
+        const email = customer.email.toLowerCase().trim();
+        db.prepare("DELETE FROM users WHERE email = ?").run(email);
+        console.log(`Acesso revogado (reembolso/cancelamento): ${email}`);
       }
 
       // Sempre retorne 200 para o Kiwify não tentar reenviar
@@ -483,7 +487,14 @@ async function startServer() {
 
   app.post("/api/push/send-all", async (req, res) => {
     try {
-      const { title, body, url } = req.body;
+      const { title, body, url, token } = req.body;
+      
+      // Security check
+      const adminToken = process.env.ADMIN_TOKEN;
+      if (adminToken && token !== adminToken) {
+        return res.status(401).json({ error: "Unauthorized. Invalid admin token." });
+      }
+
       const subscriptions = db.prepare("SELECT subscription FROM push_subscriptions").all() as any[];
       
       const payload = JSON.stringify({ title, body, url: url || '/' });
