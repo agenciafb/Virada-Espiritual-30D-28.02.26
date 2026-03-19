@@ -6,6 +6,7 @@ export interface User {
   streak: number;
   progress: number;
   last_access: string;
+  last_completion_date?: string;
 }
 
 export interface Day {

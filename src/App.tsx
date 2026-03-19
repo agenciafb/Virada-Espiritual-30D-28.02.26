@@ -170,7 +170,7 @@ class ErrorBoundary extends Component<{ children: React.ReactNode }, { hasError:
               Sair e Tentar Novamente
             </button>
           </div>
-          {process.env.NODE_ENV === 'development' && (
+          {(import.meta as any).env.DEV && (
             <pre className="mt-8 p-4 bg-item rounded text-left text-xs overflow-auto max-w-full text-red-500">
               {error?.toString()}
             </pre>
@@ -765,7 +765,10 @@ const HomePage = ({
 
   const allDone = mission.devotional && mission.prayer && mission.gratitude && mission.reflection;
   const progressPercent = (user.progress / 30) * 100;
-  const today = new Date(new Date().getTime() - (new Date().getTimezoneOffset() * 60000)).toISOString().split('T')[0];
+  
+  const now = new Date();
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  const isDayCompletedToday = user.last_completion_date === today;
 
   useEffect(() => {
     fetch('/api/declarations')
@@ -830,14 +833,27 @@ const HomePage = ({
     }
   };
 
+  const [showInstallGuide, setShowInstallGuide] = useState(false);
+
   return (
     <div className="min-h-screen pb-32">
+      <AnimatePresence>
+        {showInstallGuide && <InstallGuide onClose={() => setShowInstallGuide(false)} />}
+      </AnimatePresence>
+
       <header className="p-8 flex justify-between items-center">
         <div className="space-y-1">
           <p className="text-[10px] uppercase tracking-[0.3em] font-bold text-muted">Bom dia, Deus quer falar com você hoje.</p>
           <h2 className="text-2xl md:text-3xl display-bold">Olá, <span className="serif-italic gold-text">{user.name.split(' ')[0]}</span></h2>
         </div>
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-2">
+          <button 
+            onClick={() => setShowInstallGuide(true)}
+            className="p-3 rounded-full border border-item glass-card flex items-center gap-2"
+          >
+            <Download className="w-5 h-5 text-muted" />
+            <span className="text-[10px] uppercase tracking-widest font-bold hidden sm:inline text-muted">Instalar</span>
+          </button>
           <button onClick={onToggleTheme} className="p-3 rounded-full border border-item glass-card">
             {theme === 'dark' ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
           </button>
@@ -859,6 +875,21 @@ const HomePage = ({
             </div>
           </div>
 
+          {isDayCompletedToday && (
+            <motion.div 
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="p-4 bg-emerald-500/10 border border-emerald-500/20 rounded-2xl text-center"
+            >
+              <p className="text-xs font-bold text-emerald-500 uppercase tracking-widest">
+                ✨ Missão de hoje concluída! ✨
+              </p>
+              <p className="text-[10px] text-muted mt-1 uppercase tracking-widest font-bold">
+                Próximo dia disponível amanhã após as 00:00hs.
+              </p>
+            </motion.div>
+          )}
+
           <div className="space-y-3">
             {[
               { id: 'devotional', label: 'Ler o devocional', icon: BookOpen, action: () => onStartDay(user.progress + 1) },
@@ -867,6 +898,8 @@ const HomePage = ({
               { id: 'reflection', label: 'Refletir no diário espiritual', icon: MessageSquare, action: onOpenDiary },
             ].map((item) => {
               const isDone = mission[item.id as keyof typeof mission];
+              const isDisabled = isDayCompletedToday && (item.id === 'devotional' || item.id === 'prayer');
+              
               return (
                 <motion.div 
                   key={item.id} 
@@ -875,10 +908,12 @@ const HomePage = ({
                     isDone 
                       ? 'bg-emerald-500/5 border-emerald-500/20' 
                       : 'bg-item border-item'
-                  }`}
+                  } ${isDisabled ? 'opacity-50 grayscale' : ''}`}
                 >
                   <button
+                    disabled={isDisabled}
                     onClick={() => {
+                      if (isDisabled) return;
                       const newMission = { ...mission, [item.id]: !isDone };
                       updateMission(newMission);
                     }}
@@ -896,8 +931,12 @@ const HomePage = ({
                     </motion.div>
                   </button>
                   <button
-                    onClick={item.action}
-                    className={`flex-grow flex items-center justify-between px-2 py-4 text-left group`}
+                    disabled={isDisabled}
+                    onClick={() => {
+                      if (isDisabled) return;
+                      item.action();
+                    }}
+                    className={`flex-grow flex items-center justify-between px-2 py-4 text-left group ${isDisabled ? 'cursor-not-allowed' : ''}`}
                   >
                     <div className="flex items-center gap-4">
                       <div className={`p-2 rounded-lg transition-colors ${isDone ? 'text-emerald-500' : 'text-muted opacity-50'}`}>
@@ -1409,6 +1448,7 @@ const CongratulationsPage = ({ onBack }: { onBack: () => void }) => {
 const ProfilePage = ({ user, achievements, onBack, onLogout }: { user: User; achievements: any[]; onBack: () => void; onLogout: () => void }) => {
   const [pushStatus, setPushStatus] = useState<'default' | 'granted' | 'denied' | 'loading'>('loading');
   const [loading, setLoading] = useState(false);
+  const [showInstallGuide, setShowInstallGuide] = useState(false);
 
   useEffect(() => {
     if ('Notification' in window) {
@@ -1489,11 +1529,20 @@ const ProfilePage = ({ user, achievements, onBack, onLogout }: { user: User; ach
       animate={{ opacity: 1, x: 0 }}
       className="min-h-screen pb-32"
     >
-      <header className="p-6 flex items-center gap-4 sticky top-0 z-50 nav-blur">
-        <button onClick={onBack} className="p-2 -ml-2 text-muted hover:text-app transition-colors">
-          <ChevronLeft className="w-6 h-6" />
+      <header className="p-6 flex items-center justify-between sticky top-0 z-50 nav-blur">
+        <div className="flex items-center gap-4">
+          <button onClick={onBack} className="p-2 -ml-2 text-muted hover:text-app transition-colors">
+            <ChevronLeft className="w-6 h-6" />
+          </button>
+          <h2 className="text-lg display-bold">Meu Perfil</h2>
+        </div>
+        <button 
+          onClick={() => setShowInstallGuide(true)}
+          className="p-2 rounded-xl bg-gold-500/10 text-gold-500 hover:bg-gold-500/20 transition-all flex items-center gap-2"
+        >
+          <Download className="w-5 h-5" />
+          <span className="text-[10px] font-bold uppercase tracking-widest hidden sm:block">Instalar App</span>
         </button>
-        <h2 className="text-lg display-bold">Meu Perfil</h2>
       </header>
 
       <main className="px-6 space-y-12 mt-8 max-w-4xl mx-auto w-full">
@@ -1558,6 +1607,22 @@ const ProfilePage = ({ user, achievements, onBack, onLogout }: { user: User; ach
             <h3 className="text-[10px] uppercase tracking-[0.3em] font-bold text-muted ml-1">Configurações</h3>
             <div className="space-y-3">
               <button 
+                onClick={() => setShowInstallGuide(true)}
+                className="w-full glass-card p-6 text-left flex items-center justify-between group"
+              >
+                <div className="flex items-center gap-4">
+                  <div className="w-10 h-10 rounded-xl bg-emerald-500/10 flex items-center justify-center text-emerald-500">
+                    <Smartphone className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <span className="font-bold uppercase tracking-widest text-sm block">Instalar App</span>
+                    <span className="text-[10px] text-muted uppercase tracking-widest font-bold">Guia de Instalação</span>
+                  </div>
+                </div>
+                <ChevronRight className="w-5 h-5 text-muted group-hover:translate-x-1 transition-all opacity-30" />
+              </button>
+
+              <button 
                 onClick={subscribeToPush}
                 disabled={pushStatus === 'granted' || loading}
                 className="w-full glass-card p-6 text-left flex items-center justify-between group disabled:opacity-50"
@@ -1598,6 +1663,9 @@ const ProfilePage = ({ user, achievements, onBack, onLogout }: { user: User; ach
           </div>
         </div>
       </main>
+      <AnimatePresence>
+        {showInstallGuide && <InstallGuide onClose={() => setShowInstallGuide(false)} />}
+      </AnimatePresence>
     </motion.div>
   );
 };
@@ -1605,7 +1673,8 @@ const ProfilePage = ({ user, achievements, onBack, onLogout }: { user: User; ach
 const ChecklistPage = ({ userId, onBack }: { userId: string; onBack: () => void }) => {
   const [morning, setMorning] = useState<string[]>([]);
   const [night, setNight] = useState<string[]>([]);
-  const today = new Date(new Date().getTime() - (new Date().getTimezoneOffset() * 60000)).toISOString().split('T')[0];
+  const now = new Date();
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 
   useEffect(() => {
     if (!userId || !today) return;
@@ -1727,7 +1796,8 @@ const DiaryPage = ({ userId, onBack, onUpdateMission }: { userId: string; onBack
   const [gratitude, setGratitude] = useState('');
   const [learning, setLearning] = useState('');
   const [saved, setSaved] = useState(false);
-  const today = new Date(new Date().getTime() - (new Date().getTimezoneOffset() * 60000)).toISOString().split('T')[0];
+  const now = new Date();
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 
   useEffect(() => {
     if (!userId || !today) return;
@@ -1871,14 +1941,6 @@ export default function App() {
 
       if (fUser) {
         try {
-          // Verify with Kiwify backend to ensure access is still active
-          const verifyRes = await fetch(`/api/user/${encodeURIComponent(fUser.email || '')}`);
-          if (!verifyRes.ok) {
-            console.warn("User session active but not authorized in backend. Logging out.");
-            await signOut(auth);
-            return;
-          }
-
           const userRef = doc(db, 'users', fUser.uid);
           
           // Set up real-time listener for user document
@@ -1900,7 +1962,8 @@ export default function App() {
                 plan: 'free',
                 streak: 0,
                 progress: 0,
-                last_access: new Date().toISOString()
+                last_access: new Date().toISOString(),
+                last_completion_date: ''
               };
               setDoc(userRef, newUser).catch(console.error);
             }
@@ -1934,11 +1997,13 @@ export default function App() {
 
   const fetchAchievements = async () => {
     if (!user) return;
-    console.log("Fetching achievements for user:", user.id);
+    console.log("[Achievements] Fetching for user:", user.id);
     try {
       // Fetch all achievement definitions from backend
       const res = await fetch('/api/achievements');
+      if (!res.ok) throw new Error(`Failed to fetch definitions: ${res.status}`);
       const allAchievements = await res.json();
+      console.log("[Achievements] Definitions loaded:", allAchievements.length);
 
       // Fetch earned achievements from Firestore
       const earnedRef = collection(db, 'users', user.id, 'achievements');
@@ -1947,6 +2012,7 @@ export default function App() {
         acc[doc.id] = doc.data();
         return acc;
       }, {});
+      console.log("[Achievements] Earned data loaded:", Object.keys(earnedData).length);
 
       // Merge
       const merged = allAchievements.map((ach: any) => ({
@@ -1954,10 +2020,10 @@ export default function App() {
         earned_at: earnedData[ach.id]?.earned_at || null
       }));
 
-      console.log("Merged achievements:", merged.filter((a: any) => a.earned_at).length, "earned");
+      console.log("[Achievements] Merged:", merged.filter((a: any) => a.earned_at).length, "earned of", merged.length);
       setAchievements(merged);
     } catch (err) {
-      console.error("Error fetching achievements", err);
+      console.error("[Achievements] Error fetching:", err);
     }
   };
 
@@ -1994,6 +2060,17 @@ export default function App() {
 
 
   const startDay = async (dayId: number) => {
+    if (user) {
+      const now = new Date();
+      const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      
+      // If user is trying to start the NEXT day, check if they already completed a day today
+      if (dayId > user.progress && user.last_completion_date === todayStr) {
+        alert("Você já completou a missão de hoje! A próxima missão estará disponível amanhã após as 00:00hs.");
+        return;
+      }
+    }
+
     setLoading(true);
     try {
       const url = `/api/days/${encodeURIComponent(dayId)}`;
@@ -2046,41 +2123,79 @@ export default function App() {
 
       // Update user progress in Firestore
       const userRef = doc(db, 'users', user.id);
-      const newProgress = Math.max(user.progress, currentDay.id);
-      console.log("New progress will be:", newProgress);
+      const newProgress = Math.max(user.progress || 0, currentDay.id);
+      console.log("[Progress] New progress:", newProgress);
       
       // Calculate streak
-      let newStreak = user.streak;
-      const lastAccess = user.last_access ? new Date(user.last_access) : null;
+      let newStreak = user.streak || 0;
       const now = new Date();
       
-      // Normalize dates to midnight for comparison
-      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-      const lastDate = lastAccess ? new Date(lastAccess.getFullYear(), lastAccess.getMonth(), lastAccess.getDate()) : null;
-      
-      if (!lastDate) {
+      // Use local date strings for streak calculation to avoid timezone issues
+      const getLocalDateString = (date: Date) => {
+        return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+      };
+
+      const todayStr = getLocalDateString(now);
+      const lastAccessStr = user.last_access ? getLocalDateString(new Date(user.last_access)) : null;
+
+      console.log("[Streak] Today:", todayStr, "Last access:", lastAccessStr);
+
+      if (!lastAccessStr) {
         newStreak = 1;
-      } else {
-        const diffTime = today.getTime() - lastDate.getTime();
-        const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
+      } else if (todayStr !== lastAccessStr) {
+        const lastDate = new Date(user.last_access);
+        const diffTime = now.getTime() - lastDate.getTime();
+        const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
         
-        if (diffDays === 1) {
-          newStreak += 1;
-        } else if (diffDays > 1) {
+        console.log("[Streak] Diff days:", diffDays);
+
+        if (diffDays <= 1) {
+          // If it's the next day or within 24-48h (approx)
+          // A more precise check for "yesterday"
+          const yesterday = new Date(now);
+          yesterday.setDate(yesterday.getDate() - 1);
+          const yesterdayStr = getLocalDateString(yesterday);
+          
+          if (lastAccessStr === yesterdayStr) {
+            newStreak += 1;
+            console.log("[Streak] Incrementing to:", newStreak);
+          } else {
+            newStreak = 1;
+            console.log("[Streak] Resetting to 1 (not yesterday)");
+          }
+        } else {
           newStreak = 1;
+          console.log("[Streak] Resetting to 1 (diff > 1)");
         }
-        // if diffDays === 0, it's the same day, streak doesn't change
+      } else {
+        console.log("[Streak] Same day, keeping streak:", newStreak);
       }
 
-      console.log("Updating user doc with progress:", newProgress, "streak:", newStreak);
+      console.log("[Progress] Updating Firestore with progress:", newProgress, "streak:", newStreak);
       await updateDoc(userRef, {
         progress: newProgress,
         streak: newStreak,
-        last_access: now.toISOString()
+        last_access: now.toISOString(),
+        last_completion_date: todayStr
       });
 
+      // Sync with backend SQLite
+      try {
+        await fetch('/api/user/progress', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: user.email,
+            newStreak,
+            newProgress
+          })
+        });
+        console.log("[Progress] Backend sync successful");
+      } catch (err) {
+        console.error("[Progress] Backend sync failed:", err);
+      }
+
       // Update mission status for today
-      const todayStr = today.toISOString().split('T')[0];
       const checklistRef = doc(db, 'users', user.id, 'checklists', todayStr);
       await setDoc(checklistRef, {
         user_id: user.id,
@@ -2099,12 +2214,16 @@ export default function App() {
         "streak_30": 30
       };
 
-      console.log("Checking achievements for streak:", newStreak);
+      console.log("[Achievements] Checking thresholds for streak:", newStreak);
       for (const [achId, threshold] of Object.entries(thresholds)) {
         // Only award if not already earned
         const alreadyEarned = achievements.find(a => a.id === achId)?.earned_at;
-        if (newStreak >= threshold && !alreadyEarned) {
-          console.log("Awarding achievement:", achId);
+        
+        // Special case for streak_30: also award if progress is 30
+        const isProgress30 = achId === 'streak_30' && newProgress >= 30;
+
+        if ((newStreak >= threshold || isProgress30) && !alreadyEarned) {
+          console.log("[Achievements] Awarding:", achId);
           const achRef = doc(db, 'users', user.id, 'achievements', achId);
           await setDoc(achRef, {
             achievement_id: achId,

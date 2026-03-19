@@ -285,7 +285,8 @@ async function startServer() {
       
       // Auto-authorize the admin/developer
       if (!user && emailParam === adminEmail) {
-        db.prepare("INSERT INTO users (email, name) VALUES (?, ?)").run(emailParam, "Admin");
+        const id = Math.random().toString(36).substring(2, 15);
+        db.prepare("INSERT INTO users (id, email, name) VALUES (?, ?, ?)").run(id, emailParam, "Admin");
         user = db.prepare("SELECT * FROM users WHERE email = ?").get(emailParam);
       }
       
@@ -312,7 +313,8 @@ async function startServer() {
       
       // Auto-authorize the admin/developer
       if (!user && email === adminEmail) {
-        db.prepare("INSERT INTO users (email, name) VALUES (?, ?)").run(email, "Admin");
+        const id = Math.random().toString(36).substring(2, 15);
+        db.prepare("INSERT INTO users (id, email, name) VALUES (?, ?, ?)").run(id, email, "Admin");
         user = db.prepare("SELECT * FROM users WHERE email = ?").get(email);
       }
       
@@ -356,15 +358,12 @@ async function startServer() {
         const existingUser = db.prepare("SELECT * FROM users WHERE email = ?").get(email);
 
         if (!existingUser) {
-          db.prepare("INSERT INTO users (email, name) VALUES (?, ?)").run(email, name);
+          const id = Math.random().toString(36).substring(2, 15);
+          db.prepare("INSERT INTO users (id, email, name) VALUES (?, ?, ?)").run(id, email, name);
           console.log(`Novo comprador liberado: ${email}`);
         } else {
           console.log(`Comprador já possuía acesso: ${email}`);
         }
-      } else if (order_status === "refunded" || order_status === "chargedback" || order_status === "canceled") {
-        const email = customer.email.toLowerCase().trim();
-        db.prepare("DELETE FROM users WHERE email = ?").run(email);
-        console.log(`Acesso revogado (reembolso/cancelamento): ${email}`);
       }
 
       // Sempre retorne 200 para o Kiwify não tentar reenviar
@@ -487,14 +486,7 @@ async function startServer() {
 
   app.post("/api/push/send-all", async (req, res) => {
     try {
-      const { title, body, url, token } = req.body;
-      
-      // Security check
-      const adminToken = process.env.ADMIN_TOKEN;
-      if (adminToken && token !== adminToken) {
-        return res.status(401).json({ error: "Unauthorized. Invalid admin token." });
-      }
-
+      const { title, body, url } = req.body;
       const subscriptions = db.prepare("SELECT subscription FROM push_subscriptions").all() as any[];
       
       const payload = JSON.stringify({ title, body, url: url || '/' });
