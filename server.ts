@@ -12,6 +12,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const db = new Database("database.db");
+const ADMIN_EMAIL = "fbassistecjari@gmail.com";
 
 // Initialize Database
 db.exec(`
@@ -281,11 +282,10 @@ async function startServer() {
         return res.status(400).json({ error: "E-mail não fornecido" });
       }
 
-      const adminEmail = "fbassistecjari@gmail.com";
       let user = db.prepare("SELECT * FROM users WHERE email = ?").get(emailParam) as any;
       
       // Auto-authorize the admin/developer
-      if (!user && emailParam === adminEmail) {
+      if (!user && emailParam === ADMIN_EMAIL) {
         const id = Math.random().toString(36).substring(2, 15);
         db.prepare("INSERT INTO users (id, email, name) VALUES (?, ?, ?)").run(id, emailParam, "Admin");
         user = db.prepare("SELECT * FROM users WHERE email = ?").get(emailParam);
@@ -308,12 +308,11 @@ async function startServer() {
   app.get("/api/user/:email", (req, res) => {
     try {
       const email = req.params.email.toLowerCase().trim();
-      const adminEmail = "fbassistecjari@gmail.com";
       
       let user = db.prepare("SELECT * FROM users WHERE email = ?").get(email) as any;
       
       // Auto-authorize the admin/developer
-      if (!user && email === adminEmail) {
+      if (!user && email === ADMIN_EMAIL) {
         const id = Math.random().toString(36).substring(2, 15);
         db.prepare("INSERT INTO users (id, email, name) VALUES (?, ?, ?)").run(id, email, "Admin");
         user = db.prepare("SELECT * FROM users WHERE email = ?").get(email);
