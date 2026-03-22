@@ -332,7 +332,7 @@ const ProgressBar = ({ current, total }: { current: number; total: number }) => 
 
 // --- Pages ---
 
-const InstallGuide = ({ onClose }: { onClose: () => void }) => {
+const InstallGuide = ({ onClose, deferredPrompt, onInstall }: { onClose: () => void; deferredPrompt: any; onInstall: () => void }) => {
   return (
     <motion.div 
       initial={{ opacity: 0 }}
@@ -343,7 +343,7 @@ const InstallGuide = ({ onClose }: { onClose: () => void }) => {
       <motion.div 
         initial={{ scale: 0.9, y: 20 }}
         animate={{ scale: 1, y: 0 }}
-        className="glass-card w-full max-w-sm p-8 space-y-8 relative overflow-hidden"
+        className="glass-card w-full max-w-sm p-8 space-y-8 relative overflow-hidden max-h-[90vh] overflow-y-auto"
       >
         <button onClick={onClose} className="absolute top-4 right-4 p-2 opacity-40 hover:opacity-100">
           <X className="w-6 h-6" />
@@ -356,6 +356,17 @@ const InstallGuide = ({ onClose }: { onClose: () => void }) => {
           <h2 className="text-2xl display-bold gold-text">Instalar no Celular</h2>
           <p className="text-xs opacity-50 uppercase tracking-widest font-bold">Web App Premium</p>
         </div>
+
+        {deferredPrompt && (
+          <div className="p-4 rounded-2xl bg-gold-500/10 border border-gold-500/20 space-y-4">
+            <p className="text-sm text-center text-gold-500 font-medium">
+              Seu dispositivo suporta instalação direta!
+            </p>
+            <Button variant="gold" className="w-full py-4 font-bold shadow-lg shadow-gold-500/20" onClick={onInstall}>
+              Instalar Agora
+            </Button>
+          </div>
+        )}
 
         <div className="space-y-8">
           {/* iOS Section */}
@@ -417,7 +428,7 @@ const InstallGuide = ({ onClose }: { onClose: () => void }) => {
   );
 };
 
-const LoginPage = ({ onLogin, theme, onToggleTheme }: { onLogin: (user: FirebaseUser) => void; theme: 'light' | 'dark'; onToggleTheme: () => void }) => {
+const LoginPage = ({ onLogin, theme, onToggleTheme, deferredPrompt, onInstall }: { onLogin: (user: FirebaseUser) => void; theme: 'light' | 'dark'; onToggleTheme: () => void; deferredPrompt: any; onInstall: () => void }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
@@ -593,7 +604,7 @@ const LoginPage = ({ onLogin, theme, onToggleTheme }: { onLogin: (user: Firebase
   return (
     <div className="min-h-screen flex flex-col p-8 md:p-12 bg-app">
       <AnimatePresence>
-        {showGuide && <InstallGuide onClose={() => setShowGuide(false)} />}
+        {showGuide && <InstallGuide onClose={() => setShowGuide(false)} deferredPrompt={deferredPrompt} onInstall={onInstall} />}
       </AnimatePresence>
 
       <header className="flex justify-between items-center mb-12">
@@ -605,7 +616,7 @@ const LoginPage = ({ onLogin, theme, onToggleTheme }: { onLogin: (user: Firebase
         </div>
         <div className="flex items-center gap-2">
           <button 
-            onClick={() => setShowGuide(true)}
+            onClick={() => deferredPrompt ? onInstall() : setShowGuide(true)}
             className="p-3 rounded-full border border-item hover-bg-item transition-colors flex items-center gap-2"
           >
             <Download className="w-5 h-5 text-muted" />
@@ -783,7 +794,9 @@ const HomePage = ({
   onOpenProfile,
   onOpenDiary,
   theme,
-  onToggleTheme
+  onToggleTheme,
+  deferredPrompt,
+  onInstall
 }: { 
   user: User; 
   onStartDay: (dayId: number) => void;
@@ -794,6 +807,8 @@ const HomePage = ({
   onOpenDiary: () => void;
   theme: 'light' | 'dark';
   onToggleTheme: () => void;
+  deferredPrompt: any;
+  onInstall: () => void;
 }) => {
   const [dailyDeclaration, setDailyDeclaration] = useState<Declaration | null>(null);
   const [mission, setMission] = useState({
@@ -884,7 +899,7 @@ const HomePage = ({
   return (
     <div className="min-h-screen pb-32">
       <AnimatePresence>
-        {showInstallGuide && <InstallGuide onClose={() => setShowInstallGuide(false)} />}
+        {showInstallGuide && <InstallGuide onClose={() => setShowInstallGuide(false)} deferredPrompt={deferredPrompt} onInstall={onInstall} />}
       </AnimatePresence>
 
       <header className="p-8 flex justify-between items-center">
@@ -894,7 +909,7 @@ const HomePage = ({
         </div>
         <div className="flex items-center gap-2">
           <button 
-            onClick={() => setShowInstallGuide(true)}
+            onClick={() => deferredPrompt ? onInstall() : setShowInstallGuide(true)}
             className="p-3 rounded-full border border-item glass-card flex items-center gap-2"
           >
             <Download className="w-5 h-5 text-muted" />
@@ -1503,7 +1518,7 @@ const CongratulationsPage = ({ onBack }: { onBack: () => void }) => {
   );
 };
 
-const ProfilePage = ({ user, achievements, onBack, onLogout }: { user: User; achievements: any[]; onBack: () => void; onLogout: () => void }) => {
+const ProfilePage = ({ user, achievements, onBack, onLogout, deferredPrompt, onInstall }: { user: User; achievements: any[]; onBack: () => void; onLogout: () => void; deferredPrompt: any; onInstall: () => void }) => {
   const [pushStatus, setPushStatus] = useState<'default' | 'granted' | 'denied' | 'loading'>('loading');
   const [loading, setLoading] = useState(false);
   const [showInstallGuide, setShowInstallGuide] = useState(false);
@@ -1600,7 +1615,7 @@ const ProfilePage = ({ user, achievements, onBack, onLogout }: { user: User; ach
           <h2 className="text-lg display-bold">Meu Perfil</h2>
         </div>
         <button 
-          onClick={() => setShowInstallGuide(true)}
+          onClick={() => deferredPrompt ? onInstall() : setShowInstallGuide(true)}
           className="p-2 rounded-xl bg-gold-500/10 text-gold-500 hover:bg-gold-500/20 transition-all flex items-center gap-2"
         >
           <Download className="w-5 h-5" />
@@ -1727,7 +1742,7 @@ const ProfilePage = ({ user, achievements, onBack, onLogout }: { user: User; ach
         </div>
       </main>
       <AnimatePresence>
-        {showInstallGuide && <InstallGuide onClose={() => setShowInstallGuide(false)} />}
+        {showInstallGuide && <InstallGuide onClose={() => setShowInstallGuide(false)} deferredPrompt={deferredPrompt} onInstall={onInstall} />}
       </AnimatePresence>
     </motion.div>
   );
@@ -1990,6 +2005,29 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [theme, setTheme] = useState<'light' | 'dark'>('dark');
   const [isAuthReady, setIsAuthReady] = useState(false);
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+
+  useEffect(() => {
+    const handleBeforeInstallPrompt = (e: any) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+      console.log("[PWA] beforeinstallprompt event fired");
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    };
+  }, []);
+
+  const handleInstall = async () => {
+    if (!deferredPrompt) return;
+    deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+    console.log(`[PWA] User response to the install prompt: ${outcome}`);
+    setDeferredPrompt(null);
+  };
 
   useEffect(() => {
     let unsubscribeUser: (() => void) | null = null;
@@ -2200,39 +2238,25 @@ export default function App() {
       };
 
       const todayStr = getLocalDateString(now);
+      const yesterday = new Date(now);
+      yesterday.setDate(yesterday.getDate() - 1);
+      const yesterdayStr = getLocalDateString(yesterday);
+      
       const lastAccessStr = user.last_access ? getLocalDateString(new Date(user.last_access)) : null;
 
-      console.log("[Streak] Today:", todayStr, "Last access:", lastAccessStr);
+      console.log("[Streak] Today:", todayStr, "Yesterday:", yesterdayStr, "Last access:", lastAccessStr);
 
-      if (!lastAccessStr) {
+      if (!lastAccessStr || newStreak === 0) {
         newStreak = 1;
-      } else if (todayStr !== lastAccessStr) {
-        const lastDate = new Date(user.last_access);
-        const diffTime = now.getTime() - lastDate.getTime();
-        const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
-        
-        console.log("[Streak] Diff days:", diffDays);
-
-        if (diffDays <= 1) {
-          // If it's the next day or within 24-48h (approx)
-          // A more precise check for "yesterday"
-          const yesterday = new Date(now);
-          yesterday.setDate(yesterday.getDate() - 1);
-          const yesterdayStr = getLocalDateString(yesterday);
-          
-          if (lastAccessStr === yesterdayStr) {
-            newStreak += 1;
-            console.log("[Streak] Incrementing to:", newStreak);
-          } else {
-            newStreak = 1;
-            console.log("[Streak] Resetting to 1 (not yesterday)");
-          }
-        } else {
-          newStreak = 1;
-          console.log("[Streak] Resetting to 1 (diff > 1)");
-        }
-      } else {
+        console.log("[Streak] First completion or streak was 0, setting to 1");
+      } else if (todayStr === lastAccessStr) {
         console.log("[Streak] Same day, keeping streak:", newStreak);
+      } else if (lastAccessStr === yesterdayStr) {
+        newStreak += 1;
+        console.log("[Streak] Consecutive day! Incrementing to:", newStreak);
+      } else {
+        newStreak = 1;
+        console.log("[Streak] Gap detected, resetting to 1");
       }
 
       console.log("[Progress] Updating Firestore with progress:", newProgress, "streak:", newStreak);
@@ -2295,6 +2319,7 @@ export default function App() {
           console.log("[Achievements] Awarding:", achId);
           const achRef = doc(db, 'users', user.id, 'achievements', achId);
           await setDoc(achRef, {
+            user_id: user.id,
             achievement_id: achId,
             earned_at: now.toISOString()
           }, { merge: true });
@@ -2334,7 +2359,7 @@ export default function App() {
     <ErrorBoundary>
       <div className="max-w-6xl mx-auto min-h-screen shadow-2xl shadow-black/20 dark:shadow-white/5">
         <AnimatePresence mode="wait">
-          {view === 'login' && <LoginPage onLogin={handleLogin} theme={theme} onToggleTheme={toggleTheme} />}
+          {view === 'login' && <LoginPage onLogin={handleLogin} theme={theme} onToggleTheme={toggleTheme} deferredPrompt={deferredPrompt} onInstall={handleInstall} />}
           {view === 'home' && user && (
             <HomePage 
               user={user} 
@@ -2346,6 +2371,8 @@ export default function App() {
               onOpenDiary={() => setView('diary')}
               theme={theme}
               onToggleTheme={toggleTheme}
+              deferredPrompt={deferredPrompt}
+              onInstall={handleInstall}
             />
           )}
           {view === 'day' && currentDay && user && (
@@ -2366,7 +2393,7 @@ export default function App() {
             />
           )}
           {view === 'congratulations' && <CongratulationsPage onBack={() => setView('home')} />}
-          {view === 'profile' && user && <ProfilePage user={user} achievements={achievements} onBack={() => setView('home')} onLogout={handleLogout} />}
+          {view === 'profile' && user && <ProfilePage user={user} achievements={achievements} onBack={() => setView('home')} onLogout={handleLogout} deferredPrompt={deferredPrompt} onInstall={handleInstall} />}
         </AnimatePresence>
 
         {/* Navigation Bar */}

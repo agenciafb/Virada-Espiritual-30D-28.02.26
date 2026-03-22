@@ -376,8 +376,8 @@ async function startServer() {
 
   app.post("/api/user/progress", (req, res) => {
     try {
-      const { email, progress } = req.body;
-      if (!email || progress === undefined) {
+      const { email, newProgress, newStreak } = req.body;
+      if (!email || newProgress === undefined) {
         return res.status(400).json({ error: "Missing email or progress" });
       }
 
@@ -385,32 +385,10 @@ async function startServer() {
       if (!user) return res.status(404).json({ error: "User not found" });
 
       const now = new Date();
-      // Consistent local date YYYY-MM-DD
-      const today = new Date(now.getTime() - (now.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
       
-      // last_access was stored as ISO string, so split('T')[0] is UTC date.
-      // Let's change it to store just the date or be consistent.
-      const lastDate = user.last_access ? user.last_access.split('T')[0] : null;
-      
-      const yesterdayDate = new Date(now.getTime() - (now.getTimezoneOffset() * 60000));
-      yesterdayDate.setDate(yesterdayDate.getDate() - 1);
-      const yesterday = yesterdayDate.toISOString().split('T')[0];
-
-      let newStreak = user.streak || 0;
-      
-      if (lastDate === today) {
-        // Already completed something today, streak stays the same
-      } else if (lastDate === yesterday || !lastDate) {
-        // Consecutive or first time
-        newStreak = (user.streak || 0) + 1;
-      } else {
-        // Gap detected, reset to 1
-        newStreak = 1;
-      }
-
-      // Update user with the current timestamp (ISO) but we compare only the date part
+      // Update user with the current timestamp (ISO)
       db.prepare("UPDATE users SET progress = ?, streak = ?, last_access = ? WHERE email = ?")
-        .run(progress, newStreak, now.toISOString(), email);
+        .run(newProgress, newStreak, now.toISOString(), email);
 
       // Check for achievements - award all that apply up to current streak
       const achievements = db.prepare("SELECT id, title FROM achievements").all() as any[];
@@ -423,13 +401,14 @@ async function startServer() {
 
       achievements.forEach(ach => {
         const threshold = thresholds[ach.id];
-        if (threshold && newStreak >= threshold) {
+        const isProgress30 = ach.id === 'streak_30' && newProgress >= 30;
+        if ((threshold && newStreak >= threshold) || isProgress30) {
           db.prepare("INSERT OR IGNORE INTO user_achievements (user_id, achievement_id, earned_at) VALUES (?, ?, ?)")
             .run(user.id, ach.id, now.toISOString());
         }
       });
 
-      res.json({ success: true, streak: newStreak });
+      res.json({ success: true, streak: newStreak, progress: newProgress });
     } catch (err) {
       console.error(err);
       res.status(500).json({ error: "Failed to update progress" });
