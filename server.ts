@@ -102,6 +102,12 @@ db.exec(`
     earned_at TEXT NOT NULL,
     PRIMARY KEY(user_id, achievement_id)
   );
+
+  CREATE TABLE IF NOT EXISTS config (
+    key TEXT PRIMARY KEY,
+    value TEXT
+  );
+  INSERT OR REPLACE INTO config (key, value) VALUES ('bypass_kiwify', 'true');
 `);
 
 // Seed initial data if empty or outdated
@@ -282,6 +288,10 @@ async function startServer() {
         return res.status(400).json({ error: "E-mail não fornecido" });
       }
 
+      // Check bypass setting
+      const bypass = db.prepare("SELECT value FROM config WHERE key = 'bypass_kiwify'").get() as { value: string };
+      const isBypass = bypass?.value === 'true';
+
       let user = db.prepare("SELECT * FROM users WHERE email = ?").get(emailParam) as any;
       
       // Auto-authorize the admin/developer
@@ -291,11 +301,16 @@ async function startServer() {
         user = db.prepare("SELECT * FROM users WHERE email = ?").get(emailParam);
       }
       
-      if (!user) {
-        return res.status(403).json({ 
-          error: "Acesso negado. Este e-mail não possui uma compra ativa.",
-          details: "Se você acabou de comprar, aguarde alguns minutos pela liberação."
+      if (!user && !isBypass) {
+        return res.status(403).setHeader('Content-Type', 'application/json').json({ 
+          error: "Acesso ainda não liberado para este e-mail.",
+          details: "Se você já comprou, aguarde alguns minutos. Ou entre em contato com o suporte."
         });
+      }
+
+      // If bypass is on and user doesn't exist, return a mock user
+      if (!user && isBypass) {
+        return res.json({ id: 'bypass-' + emailParam, email: emailParam, name: emailParam.split('@')[0], plan: 'premium' });
       }
       
       res.json(user);
@@ -309,6 +324,10 @@ async function startServer() {
     try {
       const email = req.params.email.toLowerCase().trim();
       
+      // Check bypass setting
+      const bypass = db.prepare("SELECT value FROM config WHERE key = 'bypass_kiwify'").get() as { value: string };
+      const isBypass = bypass?.value === 'true';
+
       let user = db.prepare("SELECT * FROM users WHERE email = ?").get(email) as any;
       
       // Auto-authorize the admin/developer
@@ -318,11 +337,16 @@ async function startServer() {
         user = db.prepare("SELECT * FROM users WHERE email = ?").get(email);
       }
       
-      if (!user) {
-        return res.status(403).json({ 
-          error: "Acesso negado. Este e-mail não possui uma compra ativa.",
-          details: "Se você acabou de comprar, aguarde alguns minutos pela liberação."
+      if (!user && !isBypass) {
+        return res.status(403).setHeader('Content-Type', 'application/json').json({ 
+          error: "Acesso ainda não liberado para este e-mail.",
+          details: "Se você já comprou, aguarde alguns minutos. Ou entre em contato com o suporte."
         });
+      }
+
+      // If bypass is on and user doesn't exist, return a mock user
+      if (!user && isBypass) {
+        return res.json({ id: 'bypass-' + email, email: email, name: email.split('@')[0], plan: 'premium' });
       }
       
       res.json(user);
@@ -375,6 +399,28 @@ async function startServer() {
   });
 
   // Manual User Management (Admin Only)
+  app.get("/api/admin/config", (req, res) => {
+    try {
+      const { adminEmail } = req.query;
+      if (adminEmail !== ADMIN_EMAIL) return res.status(403).json({ error: "Unauthorized" });
+      const config = db.prepare("SELECT * FROM config").all();
+      res.json(config);
+    } catch (err) {
+      res.status(500).json({ error: "Error fetching config" });
+    }
+  });
+
+  app.post("/api/admin/config", (req, res) => {
+    try {
+      const { key, value, adminEmail } = req.body;
+      if (adminEmail !== ADMIN_EMAIL) return res.status(403).json({ error: "Unauthorized" });
+      db.prepare("INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)").run(key, String(value));
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ error: "Error updating config" });
+    }
+  });
+
   app.post("/api/admin/users", (req, res) => {
     try {
       const { email, name, adminEmail } = req.body;

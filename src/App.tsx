@@ -34,25 +34,18 @@ import {
   MoreVertical,
   Download,
   X,
-  Mail,
   ShieldCheck,
   Users,
   UserPlus,
   Trash2,
   Pause,
-  WifiOff
+  WifiOff,
+  Settings
 } from 'lucide-react';
 import { User, Day, Prayer, Checklist, Declaration } from './types';
 import { GoogleGenAI, Modality } from "@google/genai";
 import { 
-  signInWithPopup, 
-  signInWithEmailAndPassword, 
-  createUserWithEmailAndPassword, 
-  onAuthStateChanged, 
-  signOut,
-  User as FirebaseUser,
-  GoogleAuthProvider,
-  OAuthProvider
+  User as FirebaseUser
 } from 'firebase/auth';
 import { 
   doc, 
@@ -70,8 +63,7 @@ import {
   limit,
   addDoc
 } from 'firebase/firestore';
-import { auth, db, googleProvider, appleProvider } from './firebase';
-import firebaseConfig from '../firebase-applet-config.json';
+import { auth, db } from './firebase';
 
 // --- Types & Enums ---
 
@@ -185,10 +177,10 @@ class ErrorBoundary extends Component<{ children: React.ReactNode }, { hasError:
               Recarregar App
             </button>
             <button 
-              onClick={() => signOut(auth).then(() => window.location.reload())}
+              onClick={() => window.location.reload()}
               className="text-sm text-muted hover:text-app transition-colors"
             >
-              Sair e Tentar Novamente
+              Recarregar e Tentar Novamente
             </button>
           </div>
           {(import.meta as any).env.DEV && (
@@ -461,425 +453,7 @@ const InstallGuide = ({ onClose, deferredPrompt, onInstall }: { onClose: () => v
   );
 };
 
-const LoginPage = ({ onLogin, theme, onToggleTheme, deferredPrompt, onInstall }: { onLogin: (user: FirebaseUser) => void; theme: 'light' | 'dark'; onToggleTheme: () => void; deferredPrompt: any; onInstall: () => void }) => {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [name, setName] = useState('');
-  const [isSignUp, setIsSignUp] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [showGuide, setShowGuide] = useState(false);
-
-  const [showDebug, setShowDebug] = useState(false);
-
-  const handleAuth = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
-    setError('');
-    try {
-      // Kiwify verification
-      const verifyRes = await fetch(`/api/user/${encodeURIComponent(email)}`);
-      const contentType = verifyRes.headers.get("content-type");
-      
-      if (!verifyRes.ok) {
-        if (contentType && contentType.includes("application/json")) {
-          const errData = await verifyRes.json();
-          throw new Error(errData.error || 'Acesso negado.');
-        } else {
-          throw new Error(`Erro no servidor (${verifyRes.status}).`);
-        }
-      }
-
-      if (!contentType || !contentType.includes("application/json")) {
-        throw new Error("Resposta inválida do servidor (não é JSON).");
-      }
-
-      const userData = await verifyRes.json();
-
-      let userCredential;
-      if (isSignUp) {
-        userCredential = await createUserWithEmailAndPassword(auth, email, password);
-        // Create user profile in Firestore
-        const userRef = doc(db, 'users', userCredential.user.uid);
-        try {
-          await setDoc(userRef, {
-            id: userCredential.user.uid,
-            email: email,
-            name: name || email.split('@')[0],
-            plan: 'free',
-            streak: 0,
-            progress: 0,
-            last_access: new Timestamp(Math.floor(Date.now() / 1000), 0).toDate().toISOString()
-          });
-        } catch (err) {
-          handleFirestoreError(err, OperationType.WRITE, `users/${userCredential.user.uid}`);
-        }
-      } else {
-        userCredential = await signInWithEmailAndPassword(auth, email, password);
-      }
-      onLogin(userCredential.user);
-    } catch (err: any) {
-      console.error("Full Auth Error:", err);
-      let msg = err.message || 'Erro ao autenticar. Verifique seus dados.';
-      if (err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password') msg = 'E-mail ou senha incorretos.';
-      if (err.code === 'auth/email-already-in-use') msg = 'Este e-mail já está em uso.';
-      if (err.code === 'auth/weak-password') msg = 'A senha deve ter pelo menos 6 caracteres.';
-      if (err.code === 'auth/unauthorized-domain') msg = 'Domínio não autorizado. Adicione este domínio no Console do Firebase.';
-      if (err.code === 'auth/invalid-credential') msg = 'Configuração do Firebase inválida (invalid-credential).';
-      setError(msg);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleGoogleLogin = async () => {
-    setLoading(true);
-    setError('');
-    try {
-      const result = await signInWithPopup(auth, googleProvider);
-      const user = result.user;
-
-      if (!user.email) throw new Error('E-mail não retornado pelo Google.');
-
-      // Kiwify verification
-      const verifyRes = await fetch(`/api/user/${encodeURIComponent(user.email)}`);
-      const contentType = verifyRes.headers.get("content-type");
-
-      if (!verifyRes.ok) {
-        if (contentType && contentType.includes("application/json")) {
-          const errData = await verifyRes.json();
-          await signOut(auth);
-          throw new Error(errData.error || 'Acesso negado.');
-        } else {
-          await signOut(auth);
-          throw new Error(`Erro no servidor (${verifyRes.status}).`);
-        }
-      }
-
-      if (!contentType || !contentType.includes("application/json")) {
-        await signOut(auth);
-        throw new Error("Resposta inválida do servidor (não é JSON).");
-      }
-
-      const userData = await verifyRes.json();
-      
-      // Check if user exists in Firestore
-      const userRef = doc(db, 'users', user.uid);
-      let userSnap;
-      try {
-        userSnap = await getDoc(userRef);
-      } catch (err) {
-        handleFirestoreError(err, OperationType.GET, `users/${user.uid}`);
-      }
-      
-      if (!userSnap?.exists()) {
-        try {
-          await setDoc(userRef, {
-            id: user.uid,
-            email: user.email,
-            name: user.displayName || user.email?.split('@')[0] || 'Usuário',
-            plan: 'free',
-            streak: 0,
-            progress: 0,
-            last_access: new Timestamp(Math.floor(Date.now() / 1000), 0).toDate().toISOString()
-          });
-        } catch (err) {
-          handleFirestoreError(err, OperationType.WRITE, `users/${user.uid}`);
-        }
-      }
-      onLogin(user);
-    } catch (err: any) {
-      console.error("Full Google Auth Error:", err);
-      let msg = err.message || 'Erro ao entrar com Google.';
-      if (err.code === 'auth/unauthorized-domain') msg = 'Domínio não autorizado. Adicione este domínio no Console do Firebase.';
-      if (err.code === 'auth/invalid-credential') msg = 'Configuração do Firebase inválida (invalid-credential).';
-      setError(msg);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleAppleLogin = async () => {
-    setLoading(true);
-    setError('');
-    try {
-      const result = await signInWithPopup(auth, appleProvider);
-      const user = result.user;
-
-      if (!user.email) throw new Error('E-mail não retornado pela Apple.');
-
-      // Kiwify verification
-      const verifyRes = await fetch(`/api/user/${encodeURIComponent(user.email)}`);
-      const contentType = verifyRes.headers.get("content-type");
-
-      if (!verifyRes.ok) {
-        if (contentType && contentType.includes("application/json")) {
-          const errData = await verifyRes.json();
-          await signOut(auth);
-          throw new Error(errData.error || 'Acesso negado.');
-        } else {
-          await signOut(auth);
-          throw new Error(`Erro no servidor (${verifyRes.status}).`);
-        }
-      }
-
-      if (!contentType || !contentType.includes("application/json")) {
-        await signOut(auth);
-        throw new Error("Resposta inválida do servidor (não é JSON).");
-      }
-
-      const userData = await verifyRes.json();
-      
-      // Check if user exists in Firestore
-      const userRef = doc(db, 'users', user.uid);
-      let userSnap;
-      try {
-        userSnap = await getDoc(userRef);
-      } catch (err) {
-        handleFirestoreError(err, OperationType.GET, `users/${user.uid}`);
-      }
-      
-      if (!userSnap?.exists()) {
-        try {
-          await setDoc(userRef, {
-            id: user.uid,
-            email: user.email,
-            name: user.displayName || user.email?.split('@')[0] || 'Usuário',
-            plan: 'free',
-            streak: 0,
-            progress: 0,
-            last_access: new Timestamp(Math.floor(Date.now() / 1000), 0).toDate().toISOString()
-          });
-        } catch (err) {
-          handleFirestoreError(err, OperationType.WRITE, `users/${user.uid}`);
-        }
-      }
-      onLogin(user);
-    } catch (err: any) {
-      console.error("Full Apple Auth Error:", err);
-      let msg = err.message || 'Erro ao entrar com Apple.';
-      if (err.code === 'auth/unauthorized-domain') msg = 'Domínio não autorizado. Adicione este domínio no Console do Firebase.';
-      if (err.code === 'auth/invalid-credential') msg = 'Configuração do Firebase inválida (invalid-credential).';
-      setError(msg);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <div className="min-h-screen flex flex-col p-8 md:p-12 bg-app">
-      <AnimatePresence>
-        {showGuide && <InstallGuide onClose={() => setShowGuide(false)} deferredPrompt={deferredPrompt} onInstall={onInstall} />}
-      </AnimatePresence>
-
-      <header className="flex justify-between items-center mb-12">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-full gold-gradient flex items-center justify-center shadow-lg shadow-gold-500/20">
-            <Flame className="w-6 h-6 text-white" />
-          </div>
-          <span className="display-bold text-2xl tracking-tight gold-text">Virada 30D</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <button 
-            onClick={() => deferredPrompt ? onInstall() : setShowGuide(true)}
-            className="p-3 rounded-full border border-item hover-bg-item transition-colors flex items-center gap-2"
-          >
-            <Download className="w-5 h-5 text-muted" />
-            <span className="text-[10px] uppercase tracking-widest font-bold hidden sm:inline text-muted">Instalar</span>
-          </button>
-          <button onClick={onToggleTheme} className="p-3 rounded-full border border-item hover-bg-item transition-colors">
-            {theme === 'dark' ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
-          </button>
-        </div>
-      </header>
-
-      <motion.div 
-        initial={{ opacity: 0, y: 30 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.8, ease: "easeOut" }}
-        className="flex-1 flex flex-col lg:flex-row items-center justify-center max-w-6xl mx-auto w-full gap-12 lg:gap-24"
-      >
-        <div className="space-y-6 lg:w-1/2 text-center lg:text-left">
-          <h1 className="text-4xl md:text-6xl lg:text-7xl display-bold leading-[1.1] tracking-tighter">
-            {isSignUp ? 'Comece sua' : 'Continue sua'} <span className="serif-italic gold-text">jornada</span>.
-          </h1>
-          <p className="text-muted text-lg md:text-xl max-w-lg mx-auto lg:mx-0 leading-relaxed">
-            {isSignUp 
-              ? 'Crie sua conta para iniciar os 30 dias de transformação espiritual.' 
-              : 'Uma jornada guiada para renovar sua mente e fortalecer sua fé.'}
-          </p>
-          
-          <div className="hidden lg:block pt-8 space-y-4">
-            <div className="flex items-center gap-4 text-muted">
-              <div className="w-12 h-12 rounded-2xl bg-gold-500/10 flex items-center justify-center text-gold-500">
-                <Flame className="w-6 h-6" />
-              </div>
-              <div>
-                <p className="font-bold uppercase tracking-widest text-xs">Transformação Diária</p>
-                <p className="text-[10px] opacity-60">30 dias de foco e renovação</p>
-              </div>
-            </div>
-            <div className="flex items-center gap-4 text-muted">
-              <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 flex items-center justify-center text-emerald-500">
-                <CheckCircle2 className="w-6 h-6" />
-              </div>
-              <div>
-                <p className="font-bold uppercase tracking-widest text-xs">Acesso Exclusivo</p>
-                <p className="text-[10px] opacity-60">Conteúdo premium para alunos</p>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div className="w-full lg:w-[450px] space-y-8 glass-card p-8 md:p-10">
-          <form onSubmit={handleAuth} className="space-y-6">
-            {isSignUp && (
-              <div className="space-y-2">
-                <label className="text-[10px] font-bold uppercase tracking-[0.2em] text-muted ml-1">Nome Completo</label>
-                <div className="relative">
-                  <UserIcon className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-muted" />
-                  <input 
-                    type="text"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    placeholder="Seu nome"
-                    className="app-input pl-12"
-                    required={isSignUp}
-                  />
-                </div>
-              </div>
-            )}
-            <div className="space-y-2">
-              <label className="text-[10px] font-bold uppercase tracking-[0.2em] text-muted ml-1">E-mail</label>
-              <div className="relative">
-                <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-muted" />
-                <input 
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="seu@email.com"
-                  className="app-input pl-12"
-                  required
-                />
-              </div>
-            </div>
-            <div className="space-y-2">
-              <label className="text-[10px] font-bold uppercase tracking-[0.2em] text-muted ml-1">Senha</label>
-              <div className="relative">
-                <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-muted" />
-                <input 
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="••••••••"
-                  className="app-input pl-12"
-                  required
-                />
-              </div>
-            </div>
-
-            {error && (
-              <p className="text-red-500 text-sm ml-1">{error}</p>
-            )}
-
-            <Button 
-              variant="gold" 
-              className="w-full py-6 text-xl font-medium shadow-2xl shadow-gold-500/20"
-              disabled={loading}
-            >
-              {loading ? 'Processando...' : (isSignUp ? 'Criar Conta' : 'Iniciar Minha Jornada')}
-            </Button>
-          </form>
-
-          <div className="relative py-4">
-            <div className="absolute inset-0 flex items-center">
-              <div className="w-full border-t border-card-border"></div>
-            </div>
-            <div className="relative flex justify-center text-[10px] uppercase tracking-widest font-bold">
-              <span className="bg-app px-4 text-muted">Ou entre com</span>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <button 
-              onClick={handleGoogleLogin}
-              disabled={loading}
-              className="flex items-center justify-center gap-3 w-full bg-item border border-card-border rounded-2xl py-4 hover-bg-item transition-all active:scale-95"
-            >
-              <svg className="w-5 h-5" viewBox="0 0 24 24">
-                <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
-                <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
-                <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z" fill="#FBBC05"/>
-                <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
-              </svg>
-              <span className="font-bold text-sm">Google</span>
-            </button>
-
-            <button 
-              onClick={handleAppleLogin}
-              disabled={loading}
-              className="flex items-center justify-center gap-3 w-full bg-item border border-card-border rounded-2xl py-4 hover-bg-item transition-all active:scale-95"
-            >
-              <svg className="w-5 h-5 fill-current" viewBox="0 0 24 24">
-                <path d="M17.05 20.28c-.96.95-2.04 1.78-3.14 1.72-1.13-.05-1.56-.74-2.89-.74-1.34 0-1.83.71-2.89.77-1.07.06-2.13-.81-3.12-1.78-2.01-1.99-3.54-5.63-3.54-8.89 0-5.2 3.38-7.96 6.58-7.96 1.72 0 3.01.63 3.95.63.92 0 2.58-.77 4.62-.57 1.8.16 3.14.81 3.94 1.96-3.41 2.05-2.86 6.11.58 7.52-1.16 2.74-2.99 5.34-4.09 6.34zm-4.33-16.14c0-2.32 1.9-4.14 4.19-4.14.15 2.37-2.03 4.38-4.19 4.14z"/>
-              </svg>
-              <span className="font-bold text-sm">Apple</span>
-            </button>
-          </div>
-
-          <div className="text-center">
-            <button 
-              onClick={() => setIsSignUp(!isSignUp)}
-              className="text-sm text-muted hover:text-app transition-colors"
-            >
-              {isSignUp ? 'Já tem uma conta? Entre aqui' : 'Não tem uma conta? Cadastre-se'}
-            </button>
-          </div>
-
-          {/* Debug Info */}
-          <div className="mt-8 pt-8 border-t border-white/10">
-            <button 
-              onClick={() => setShowDebug(!showDebug)}
-              className="text-[10px] uppercase tracking-widest font-bold text-muted hover:text-white transition-colors"
-            >
-              {showDebug ? 'Esconder' : 'Mostrar'} Informações de Configuração
-            </button>
-            {showDebug && (
-              <motion.div 
-                initial={{ opacity: 0, height: 0 }}
-                animate={{ opacity: 1, height: 'auto' }}
-                className="mt-4 p-4 rounded-xl bg-white/5 space-y-3 text-[10px] font-mono text-muted break-all"
-              >
-                <p><span className="text-gold-500">Project ID:</span> {firebaseConfig.projectId}</p>
-                <p><span className="text-gold-500">Auth Domain:</span> {firebaseConfig.authDomain}</p>
-                <p><span className="text-gold-500">Current URL:</span> {window.location.href}</p>
-                <p className="text-white font-bold uppercase mt-4">Domínios que DEVEM estar autorizados no Firebase:</p>
-                <ul className="list-disc list-inside space-y-1 text-emerald-400">
-                  <li>localhost</li>
-                  <li>{firebaseConfig.projectId}.firebaseapp.com</li>
-                  <li>{firebaseConfig.projectId}.web.app</li>
-                  <li>app-virada-espiritual-30-d.vercel.app</li>
-                  <li>ais-dev-wi5jlpyg4pcjlqfadk562w-73429068247.us-west2.run.app</li>
-                  <li>ais-pre-wi5jlpyg4pcjlqfadk562w-73429068247.us-west2.run.app</li>
-                </ul>
-                <p className="text-red-400 mt-2 italic">* Se o erro "unauthorized-domain" persistir, verifique se TODOS os URLs acima estão na lista "Authorized Domains" do Firebase Authentication.</p>
-              </motion.div>
-            )}
-          </div>
-        </div>
-      </motion.div>
-
-      <footer className="mt-auto pt-12 flex justify-between items-end text-muted">
-        <div className="text-[10px] uppercase tracking-widest leading-loose">
-          © 2026 Virada 30D<br />Edição Premium
-        </div>
-        <div className="text-right">
-          <p className="serif-italic text-sm">"Tudo posso naquele que me fortalece."</p>
-        </div>
-      </footer>
-    </div>
-  );
-};
+// LoginPage removed to start from zero
 
 const DAILY_PHRASES = [
   "Confie no processo, Deus está no controle.",
@@ -982,7 +556,7 @@ const HomePage = ({
       .catch(err => console.error(err));
 
     // Load mission status from Firestore
-    if (user.id) {
+    if (user.id && user.id !== 'guest') {
       const checklistRef = doc(db, 'users', user.id, 'checklists', today);
       const unsubscribe = onSnapshot(checklistRef, (docSnap) => {
         if (docSnap.exists()) {
@@ -1007,6 +581,7 @@ const HomePage = ({
 
   const updateMission = async (newMission: typeof mission) => {
     setMission(newMission);
+    if (user.id === 'guest') return;
     try {
       const checklistRef = doc(db, 'users', user.id, 'checklists', today);
       await setDoc(checklistRef, {
@@ -1339,7 +914,7 @@ const DayDetail = ({
   const [reflection, setReflection] = useState('');
 
   useEffect(() => {
-    if (!userId || !day.id) return;
+    if (!userId || userId === 'guest' || !day.id) return;
     const reflectionRef = doc(db, 'users', userId, 'reflections', day.id.toString());
     const unsubscribe = onSnapshot(reflectionRef, (docSnap) => {
       if (docSnap.exists()) {
@@ -1916,7 +1491,7 @@ const ChecklistPage = ({ userId, onBack }: { userId: string; onBack: () => void 
   const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 
   useEffect(() => {
-    if (!userId || !today) return;
+    if (!userId || userId === 'guest' || !today) return;
     const checklistRef = doc(db, 'users', userId, 'checklists', today);
     const unsubscribe = onSnapshot(checklistRef, (docSnap) => {
       if (docSnap.exists()) {
@@ -1931,6 +1506,7 @@ const ChecklistPage = ({ userId, onBack }: { userId: string; onBack: () => void 
   }, [userId, today]);
 
   const saveChecklist = async (m: string[], n: string[]) => {
+    if (userId === 'guest') return;
     try {
       const checklistRef = doc(db, 'users', userId, 'checklists', today);
       await setDoc(checklistRef, {
@@ -2039,7 +1615,7 @@ const DiaryPage = ({ userId, onBack, onUpdateMission }: { userId: string; onBack
   const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 
   useEffect(() => {
-    if (!userId || !today) return;
+    if (!userId || userId === 'guest' || !today) return;
     const diaryRef = doc(db, 'users', userId, 'diary', today);
     const unsubscribe = onSnapshot(diaryRef, (docSnap) => {
       if (docSnap.exists()) {
@@ -2054,7 +1630,7 @@ const DiaryPage = ({ userId, onBack, onUpdateMission }: { userId: string; onBack
   }, [userId, today]);
 
   const handleSave = async () => {
-    if (!userId) return;
+    if (!userId || userId === 'guest') return;
     console.log("Saving diary for user:", userId, "date:", today);
     try {
       const diaryRef = doc(db, 'users', userId, 'diary', today);
@@ -2227,8 +1803,47 @@ const AdminPage = ({ onBack, currentUser }: { onBack: () => void, currentUser: U
   const [newEmail, setNewEmail] = useState('');
   const [newName, setNewName] = useState('');
   const [adding, setAdding] = useState(false);
+  const [bypassKiwify, setBypassKiwify] = useState(false);
+
+  const fetchConfig = async () => {
+    try {
+      if (!currentUser?.email) return;
+      const res = await fetch(`/api/admin/config?adminEmail=${encodeURIComponent(currentUser.email)}`);
+      if (res.ok) {
+        const data = await res.json();
+        const bypass = data.find((c: any) => c.key === 'bypass_kiwify');
+        setBypassKiwify(bypass?.value === 'true');
+      }
+    } catch (err) {
+      console.error("Error fetching config:", err);
+    }
+  };
+
+  const toggleBypass = async () => {
+    try {
+      const newValue = !bypassKiwify;
+      const res = await fetch('/api/admin/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          key: 'bypass_kiwify', 
+          value: newValue, 
+          adminEmail: currentUser?.email 
+        })
+      });
+      if (res.ok) {
+        setBypassKiwify(newValue);
+      }
+    } catch (err) {
+      console.error("Error toggling bypass:", err);
+    }
+  };
 
   const fetchUsers = async () => {
+    if (currentUser?.id === 'guest') {
+      setLoading(false);
+      return;
+    }
     try {
       // Firestore users
       const q = query(collection(db, 'users'), orderBy('progress', 'desc'));
@@ -2253,6 +1868,7 @@ const AdminPage = ({ onBack, currentUser }: { onBack: () => void, currentUser: U
 
   useEffect(() => {
     fetchUsers();
+    fetchConfig();
   }, [currentUser]);
 
   const handleAddUser = async (e: React.FormEvent) => {
@@ -2319,6 +1935,26 @@ const AdminPage = ({ onBack, currentUser }: { onBack: () => void, currentUser: U
         <div className="glass-card p-8 text-center space-y-2">
           <p className="text-[10px] uppercase tracking-widest font-bold text-muted">Acessos Liberados</p>
           <p className="text-4xl display-bold gold-text">{dbUsers.length}</p>
+        </div>
+      </div>
+
+      {/* Configurações Globais */}
+      <div className="glass-card p-8 space-y-6">
+        <div className="flex items-center gap-3">
+          <Settings className="w-5 h-5 text-gold-500" />
+          <h3 className="text-[10px] uppercase tracking-widest font-bold text-muted">Configurações de Acesso</h3>
+        </div>
+        <div className="flex items-center justify-between p-4 rounded-xl bg-white/5 border border-white/10">
+          <div>
+            <p className="font-bold text-sm">Liberar Acesso para Todos</p>
+            <p className="text-[10px] text-muted">Se ativado, qualquer pessoa poderá se cadastrar sem verificação do Kiwify.</p>
+          </div>
+          <button 
+            onClick={toggleBypass}
+            className={`w-12 h-6 rounded-full transition-colors relative ${bypassKiwify ? 'bg-emerald-500' : 'bg-white/10'}`}
+          >
+            <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all ${bypassKiwify ? 'left-7' : 'left-1'}`} />
+          </button>
         </div>
       </div>
 
@@ -2398,14 +2034,23 @@ const AdminPage = ({ onBack, currentUser }: { onBack: () => void, currentUser: U
 };
 
 export default function App() {
-  const [view, setView] = useState<'login' | 'home' | 'day' | 'crisis' | 'checklist' | 'declarations' | 'diary' | 'profile' | 'congratulations' | 'admin'>('login');
-  const [user, setUser] = useState<User | null>(null);
+  const [view, setView] = useState<'home' | 'day' | 'crisis' | 'checklist' | 'declarations' | 'diary' | 'profile' | 'congratulations' | 'admin'>('home');
+  const [user, setUser] = useState<User | null>({
+    id: 'guest',
+    email: 'guest@example.com',
+    name: 'Visitante',
+    plan: 'premium',
+    streak: 0,
+    progress: 0,
+    last_access: new Date().toISOString(),
+    last_completion_date: ''
+  });
   const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
   const [currentDay, setCurrentDay] = useState<Day | null>(null);
   const [achievements, setAchievements] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [theme, setTheme] = useState<'light' | 'dark'>('dark');
-  const [isAuthReady, setIsAuthReady] = useState(false);
+  const [isAuthReady, setIsAuthReady] = useState(true);
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
 
@@ -2445,64 +2090,9 @@ export default function App() {
   };
 
   useEffect(() => {
-    let unsubscribeUser: (() => void) | null = null;
-
-    const unsubscribeAuth = onAuthStateChanged(auth, async (fUser) => {
-      setFirebaseUser(fUser);
-      
-      if (unsubscribeUser) {
-        unsubscribeUser();
-        unsubscribeUser = null;
-      }
-
-      if (fUser) {
-        try {
-          const userRef = doc(db, 'users', fUser.uid);
-          
-          // Set up real-time listener for user document
-          unsubscribeUser = onSnapshot(userRef, (docSnap) => {
-            if (docSnap.exists()) {
-              const userData = docSnap.data() as User;
-              setUser(userData);
-              setIsAuthReady(true);
-              setLoading(false);
-              
-              // If we are at login, move to home
-              setView(prev => prev === 'login' ? 'home' : prev);
-            } else {
-              // Create profile if it doesn't exist
-              const newUser: User = {
-                id: fUser.uid,
-                email: fUser.email || '',
-                name: fUser.displayName || fUser.email?.split('@')[0] || 'Usuário',
-                plan: 'free',
-                streak: 0,
-                progress: 0,
-                last_access: new Date().toISOString(),
-                last_completion_date: ''
-              };
-              setDoc(userRef, newUser).catch(err => handleFirestoreError(err, OperationType.WRITE, `users/${fUser.uid}`));
-            }
-          }, (err) => {
-            console.error("Error in user onSnapshot:", err);
-            handleFirestoreError(err, OperationType.GET, `users/${fUser.uid}`);
-          });
-
-        } catch (err) {
-          console.error("Error in onAuthStateChanged setup:", err);
-        }
-      } else {
-        setUser(null);
-        setView('login');
-        setIsAuthReady(true);
-        setLoading(false);
-      }
-    });
-
-    return () => {
-      unsubscribeAuth();
-      if (unsubscribeUser) unsubscribeUser();
-    };
+    // Auth logic removed to start from zero
+    setIsAuthReady(true);
+    setLoading(false);
   }, []);
 
   useEffect(() => {
@@ -2525,17 +2115,20 @@ export default function App() {
       console.log("[Achievements] Definitions loaded:", allAchievements.length);
 
       // Fetch earned achievements from Firestore
-      const earnedRef = collection(db, 'users', user.id, 'achievements');
-      let querySnapshot;
-      try {
-        querySnapshot = await getDocs(earnedRef);
-      } catch (err) {
-        handleFirestoreError(err, OperationType.LIST, `users/${user.id}/achievements`);
+      let earnedData: any = {};
+      if (user.id !== 'guest') {
+        const earnedRef = collection(db, 'users', user.id, 'achievements');
+        let querySnapshot;
+        try {
+          querySnapshot = await getDocs(earnedRef);
+          earnedData = querySnapshot?.docs.reduce((acc: any, doc) => {
+            acc[doc.id] = doc.data();
+            return acc;
+          }, {}) || {};
+        } catch (err) {
+          handleFirestoreError(err, OperationType.LIST, `users/${user.id}/achievements`);
+        }
       }
-      const earnedData = querySnapshot?.docs.reduce((acc: any, doc) => {
-        acc[doc.id] = doc.data();
-        return acc;
-      }, {}) || {};
       console.log("[Achievements] Earned data loaded:", Object.keys(earnedData).length);
 
       // Merge
@@ -2567,19 +2160,13 @@ export default function App() {
   };
 
   const handleLogin = (fUser: FirebaseUser) => {
-    setFirebaseUser(fUser);
-    // The onAuthStateChanged listener will handle the rest
+    // Login logic removed
   };
 
   const handleLogout = async () => {
-    try {
-      await signOut(auth);
-      setUser(null);
-      setFirebaseUser(null);
-      setView('login');
-    } catch (err) {
-      console.error('Erro ao sair:', err);
-    }
+    setUser(null);
+    setFirebaseUser(null);
+    setView('home');
   };
 
 
@@ -2620,7 +2207,7 @@ export default function App() {
       setCurrentDay(dayData);
       setView('day');
 
-      if (user) {
+      if (user && user.id !== 'guest') {
         const today = new Date(new Date().getTime() - (new Date().getTimezoneOffset() * 60000)).toISOString().split('T')[0];
         const checklistRef = doc(db, 'users', user.id, 'checklists', today);
         try {
@@ -2655,15 +2242,17 @@ export default function App() {
     setLoading(true);
     try {
       // Save reflection to Firestore
-      const reflectionRef = doc(db, 'users', user.id, 'reflections', currentDay.id.toString());
-      try {
-        await setDoc(reflectionRef, {
-          user_id: user.id,
-          day_id: currentDay.id,
-          content: reflection
-        });
-      } catch (err) {
-        handleFirestoreError(err, OperationType.WRITE, `users/${user.id}/reflections/${currentDay.id}`);
+      if (user.id !== 'guest') {
+        const reflectionRef = doc(db, 'users', user.id, 'reflections', currentDay.id.toString());
+        try {
+          await setDoc(reflectionRef, {
+            user_id: user.id,
+            day_id: currentDay.id,
+            content: reflection
+          });
+        } catch (err) {
+          handleFirestoreError(err, OperationType.WRITE, `users/${user.id}/reflections/${currentDay.id}`);
+        }
       }
 
       // Update user progress in Firestore
@@ -2703,15 +2292,18 @@ export default function App() {
       }
 
       console.log("[Progress] Updating Firestore with progress:", newProgress, "streak:", newStreak);
-      try {
-        await updateDoc(userRef, {
-          progress: newProgress,
-          streak: newStreak,
-          last_access: now.toISOString(),
-          last_completion_date: todayStr
-        });
-      } catch (err) {
-        handleFirestoreError(err, OperationType.UPDATE, `users/${user.id}`);
+      if (user.id !== 'guest') {
+        try {
+          const userRef = doc(db, 'users', user.id);
+          await updateDoc(userRef, {
+            progress: newProgress,
+            streak: newStreak,
+            last_access: now.toISOString(),
+            last_completion_date: todayStr
+          });
+        } catch (err) {
+          handleFirestoreError(err, OperationType.UPDATE, `users/${user.id}`);
+        }
       }
 
       // Sync with backend SQLite
@@ -2817,7 +2409,6 @@ export default function App() {
           {!isOnline && <OfflineBanner />}
         </AnimatePresence>
         <AnimatePresence mode="wait">
-          {view === 'login' && <LoginPage onLogin={handleLogin} theme={theme} onToggleTheme={toggleTheme} deferredPrompt={deferredPrompt} onInstall={handleInstall} />}
           {view === 'home' && user && (
             <HomePage 
               user={user} 
