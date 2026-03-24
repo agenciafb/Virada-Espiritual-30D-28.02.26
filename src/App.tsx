@@ -556,7 +556,7 @@ const HomePage = ({
       .catch(err => console.error(err));
 
     // Load mission status from Firestore
-    if (user.id && user.id !== 'guest') {
+    if (user.id) {
       const checklistRef = doc(db, 'users', user.id, 'checklists', today);
       const unsubscribe = onSnapshot(checklistRef, (docSnap) => {
         if (docSnap.exists()) {
@@ -581,7 +581,6 @@ const HomePage = ({
 
   const updateMission = async (newMission: typeof mission) => {
     setMission(newMission);
-    if (user.id === 'guest') return;
     try {
       const checklistRef = doc(db, 'users', user.id, 'checklists', today);
       await setDoc(checklistRef, {
@@ -1491,7 +1490,7 @@ const ChecklistPage = ({ userId, onBack }: { userId: string; onBack: () => void 
   const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 
   useEffect(() => {
-    if (!userId || userId === 'guest' || !today) return;
+    if (!userId || !today) return;
     const checklistRef = doc(db, 'users', userId, 'checklists', today);
     const unsubscribe = onSnapshot(checklistRef, (docSnap) => {
       if (docSnap.exists()) {
@@ -1506,7 +1505,6 @@ const ChecklistPage = ({ userId, onBack }: { userId: string; onBack: () => void 
   }, [userId, today]);
 
   const saveChecklist = async (m: string[], n: string[]) => {
-    if (userId === 'guest') return;
     try {
       const checklistRef = doc(db, 'users', userId, 'checklists', today);
       await setDoc(checklistRef, {
@@ -1615,7 +1613,7 @@ const DiaryPage = ({ userId, onBack, onUpdateMission }: { userId: string; onBack
   const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 
   useEffect(() => {
-    if (!userId || userId === 'guest' || !today) return;
+    if (!userId || !today) return;
     const diaryRef = doc(db, 'users', userId, 'diary', today);
     const unsubscribe = onSnapshot(diaryRef, (docSnap) => {
       if (docSnap.exists()) {
@@ -1630,7 +1628,7 @@ const DiaryPage = ({ userId, onBack, onUpdateMission }: { userId: string; onBack
   }, [userId, today]);
 
   const handleSave = async () => {
-    if (!userId || userId === 'guest') return;
+    if (!userId) return;
     console.log("Saving diary for user:", userId, "date:", today);
     try {
       const diaryRef = doc(db, 'users', userId, 'diary', today);
@@ -1840,10 +1838,6 @@ const AdminPage = ({ onBack, currentUser }: { onBack: () => void, currentUser: U
   };
 
   const fetchUsers = async () => {
-    if (currentUser?.id === 'guest') {
-      setLoading(false);
-      return;
-    }
     try {
       // Firestore users
       const q = query(collection(db, 'users'), orderBy('progress', 'desc'));
@@ -2115,20 +2109,17 @@ export default function App() {
       console.log("[Achievements] Definitions loaded:", allAchievements.length);
 
       // Fetch earned achievements from Firestore
-      let earnedData: any = {};
-      if (user.id !== 'guest') {
-        const earnedRef = collection(db, 'users', user.id, 'achievements');
-        let querySnapshot;
-        try {
-          querySnapshot = await getDocs(earnedRef);
-          earnedData = querySnapshot?.docs.reduce((acc: any, doc) => {
-            acc[doc.id] = doc.data();
-            return acc;
-          }, {}) || {};
-        } catch (err) {
-          handleFirestoreError(err, OperationType.LIST, `users/${user.id}/achievements`);
-        }
+      const earnedRef = collection(db, 'users', user.id, 'achievements');
+      let querySnapshot;
+      try {
+        querySnapshot = await getDocs(earnedRef);
+      } catch (err) {
+        handleFirestoreError(err, OperationType.LIST, `users/${user.id}/achievements`);
       }
+      const earnedData = querySnapshot?.docs.reduce((acc: any, doc) => {
+        acc[doc.id] = doc.data();
+        return acc;
+      }, {}) || {};
       console.log("[Achievements] Earned data loaded:", Object.keys(earnedData).length);
 
       // Merge
@@ -2207,7 +2198,7 @@ export default function App() {
       setCurrentDay(dayData);
       setView('day');
 
-      if (user && user.id !== 'guest') {
+      if (user) {
         const today = new Date(new Date().getTime() - (new Date().getTimezoneOffset() * 60000)).toISOString().split('T')[0];
         const checklistRef = doc(db, 'users', user.id, 'checklists', today);
         try {
@@ -2242,17 +2233,15 @@ export default function App() {
     setLoading(true);
     try {
       // Save reflection to Firestore
-      if (user.id !== 'guest') {
-        const reflectionRef = doc(db, 'users', user.id, 'reflections', currentDay.id.toString());
-        try {
-          await setDoc(reflectionRef, {
-            user_id: user.id,
-            day_id: currentDay.id,
-            content: reflection
-          });
-        } catch (err) {
-          handleFirestoreError(err, OperationType.WRITE, `users/${user.id}/reflections/${currentDay.id}`);
-        }
+      const reflectionRef = doc(db, 'users', user.id, 'reflections', currentDay.id.toString());
+      try {
+        await setDoc(reflectionRef, {
+          user_id: user.id,
+          day_id: currentDay.id,
+          content: reflection
+        });
+      } catch (err) {
+        handleFirestoreError(err, OperationType.WRITE, `users/${user.id}/reflections/${currentDay.id}`);
       }
 
       // Update user progress in Firestore
@@ -2292,18 +2281,16 @@ export default function App() {
       }
 
       console.log("[Progress] Updating Firestore with progress:", newProgress, "streak:", newStreak);
-      if (user.id !== 'guest') {
-        try {
-          const userRef = doc(db, 'users', user.id);
-          await updateDoc(userRef, {
-            progress: newProgress,
-            streak: newStreak,
-            last_access: now.toISOString(),
-            last_completion_date: todayStr
-          });
-        } catch (err) {
-          handleFirestoreError(err, OperationType.UPDATE, `users/${user.id}`);
-        }
+      try {
+        const userRef = doc(db, 'users', user.id);
+        await updateDoc(userRef, {
+          progress: newProgress,
+          streak: newStreak,
+          last_access: now.toISOString(),
+          last_completion_date: todayStr
+        });
+      } catch (err) {
+        handleFirestoreError(err, OperationType.UPDATE, `users/${user.id}`);
       }
 
       // Sync with backend SQLite
