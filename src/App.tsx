@@ -37,6 +37,8 @@ import {
   Mail,
   ShieldCheck,
   Users,
+  UserPlus,
+  Trash2,
   Pause,
   WifiOff
 } from 'lucide-react';
@@ -69,6 +71,7 @@ import {
   addDoc
 } from 'firebase/firestore';
 import { auth, db, googleProvider, appleProvider } from './firebase';
+import firebaseConfig from '../firebase-applet-config.json';
 
 // --- Types & Enums ---
 
@@ -467,6 +470,8 @@ const LoginPage = ({ onLogin, theme, onToggleTheme, deferredPrompt, onInstall }:
   const [error, setError] = useState('');
   const [showGuide, setShowGuide] = useState(false);
 
+  const [showDebug, setShowDebug] = useState(false);
+
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
@@ -514,11 +519,13 @@ const LoginPage = ({ onLogin, theme, onToggleTheme, deferredPrompt, onInstall }:
       }
       onLogin(userCredential.user);
     } catch (err: any) {
-      console.error(err);
+      console.error("Full Auth Error:", err);
       let msg = err.message || 'Erro ao autenticar. Verifique seus dados.';
       if (err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password') msg = 'E-mail ou senha incorretos.';
       if (err.code === 'auth/email-already-in-use') msg = 'Este e-mail já está em uso.';
       if (err.code === 'auth/weak-password') msg = 'A senha deve ter pelo menos 6 caracteres.';
+      if (err.code === 'auth/unauthorized-domain') msg = 'Domínio não autorizado. Adicione este domínio no Console do Firebase.';
+      if (err.code === 'auth/invalid-credential') msg = 'Configuração do Firebase inválida (invalid-credential).';
       setError(msg);
     } finally {
       setLoading(false);
@@ -582,8 +589,11 @@ const LoginPage = ({ onLogin, theme, onToggleTheme, deferredPrompt, onInstall }:
       }
       onLogin(user);
     } catch (err: any) {
-      console.error(err);
-      setError(err.message || 'Erro ao entrar com Google.');
+      console.error("Full Google Auth Error:", err);
+      let msg = err.message || 'Erro ao entrar com Google.';
+      if (err.code === 'auth/unauthorized-domain') msg = 'Domínio não autorizado. Adicione este domínio no Console do Firebase.';
+      if (err.code === 'auth/invalid-credential') msg = 'Configuração do Firebase inválida (invalid-credential).';
+      setError(msg);
     } finally {
       setLoading(false);
     }
@@ -646,8 +656,11 @@ const LoginPage = ({ onLogin, theme, onToggleTheme, deferredPrompt, onInstall }:
       }
       onLogin(user);
     } catch (err: any) {
-      console.error(err);
-      setError(err.message || 'Erro ao entrar com Apple.');
+      console.error("Full Apple Auth Error:", err);
+      let msg = err.message || 'Erro ao entrar com Apple.';
+      if (err.code === 'auth/unauthorized-domain') msg = 'Domínio não autorizado. Adicione este domínio no Console do Firebase.';
+      if (err.code === 'auth/invalid-credential') msg = 'Configuração do Firebase inválida (invalid-credential).';
+      setError(msg);
     } finally {
       setLoading(false);
     }
@@ -821,6 +834,37 @@ const LoginPage = ({ onLogin, theme, onToggleTheme, deferredPrompt, onInstall }:
             >
               {isSignUp ? 'Já tem uma conta? Entre aqui' : 'Não tem uma conta? Cadastre-se'}
             </button>
+          </div>
+
+          {/* Debug Info */}
+          <div className="mt-8 pt-8 border-t border-white/10">
+            <button 
+              onClick={() => setShowDebug(!showDebug)}
+              className="text-[10px] uppercase tracking-widest font-bold text-muted hover:text-white transition-colors"
+            >
+              {showDebug ? 'Esconder' : 'Mostrar'} Informações de Configuração
+            </button>
+            {showDebug && (
+              <motion.div 
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: 'auto' }}
+                className="mt-4 p-4 rounded-xl bg-white/5 space-y-3 text-[10px] font-mono text-muted break-all"
+              >
+                <p><span className="text-gold-500">Project ID:</span> {firebaseConfig.projectId}</p>
+                <p><span className="text-gold-500">Auth Domain:</span> {firebaseConfig.authDomain}</p>
+                <p><span className="text-gold-500">Current URL:</span> {window.location.href}</p>
+                <p className="text-white font-bold uppercase mt-4">Domínios que DEVEM estar autorizados no Firebase:</p>
+                <ul className="list-disc list-inside space-y-1 text-emerald-400">
+                  <li>localhost</li>
+                  <li>{firebaseConfig.projectId}.firebaseapp.com</li>
+                  <li>{firebaseConfig.projectId}.web.app</li>
+                  <li>app-virada-espiritual-30-d.vercel.app</li>
+                  <li>ais-dev-wi5jlpyg4pcjlqfadk562w-73429068247.us-west2.run.app</li>
+                  <li>ais-pre-wi5jlpyg4pcjlqfadk562w-73429068247.us-west2.run.app</li>
+                </ul>
+                <p className="text-red-400 mt-2 italic">* Se o erro "unauthorized-domain" persistir, verifique se TODOS os URLs acima estão na lista "Authorized Domains" do Firebase Authentication.</p>
+              </motion.div>
+            )}
           </div>
         </div>
       </motion.div>
@@ -2176,28 +2220,84 @@ const AudioPlayer = ({ text }: { text: string }) => {
   );
 };
 
-const AdminPage = ({ onBack }: { onBack: () => void }) => {
+const AdminPage = ({ onBack, currentUser }: { onBack: () => void, currentUser: User | null }) => {
   const [users, setUsers] = useState<any[]>([]);
+  const [dbUsers, setDbUsers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [newEmail, setNewEmail] = useState('');
+  const [newName, setNewName] = useState('');
+  const [adding, setAdding] = useState(false);
+
+  const fetchUsers = async () => {
+    try {
+      // Firestore users
+      const q = query(collection(db, 'users'), orderBy('progress', 'desc'));
+      const querySnapshot = await getDocs(q);
+      const usersData = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setUsers(usersData);
+
+      // SQLite users
+      if (currentUser?.email) {
+        const res = await fetch(`/api/admin/db-users?adminEmail=${encodeURIComponent(currentUser.email)}`);
+        if (res.ok) {
+          const data = await res.json();
+          setDbUsers(data);
+        }
+      }
+    } catch (err) {
+      console.error("Error fetching users:", err);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    const fetchUsers = async () => {
-      try {
-        const q = query(collection(db, 'users'), orderBy('progress', 'desc'));
-        const querySnapshot = await getDocs(q);
-        const usersData = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        setUsers(usersData);
-      } catch (err) {
-        console.error("Error fetching users:", err);
-      } finally {
-        setLoading(false);
-      }
-    };
     fetchUsers();
-  }, []);
+  }, [currentUser]);
+
+  const handleAddUser = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newEmail || !currentUser?.email) return;
+    setAdding(true);
+    try {
+      const res = await fetch('/api/admin/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: newEmail,
+          name: newName,
+          adminEmail: currentUser.email
+        })
+      });
+      if (res.ok) {
+        setNewEmail('');
+        setNewName('');
+        fetchUsers();
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setAdding(false);
+    }
+  };
+
+  const handleRemoveUser = async (email: string) => {
+    if (!currentUser?.email) return;
+    if (!window.confirm(`Remover acesso de ${email}?`)) return;
+    try {
+      const res = await fetch(`/api/admin/users/${encodeURIComponent(email)}?adminEmail=${encodeURIComponent(currentUser.email)}`, {
+        method: 'DELETE'
+      });
+      if (res.ok) {
+        fetchUsers();
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
 
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="min-h-screen p-6 space-y-8 max-w-6xl mx-auto w-full">
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="min-h-screen p-6 space-y-8 max-w-6xl mx-auto w-full pb-24">
       <header className="flex items-center gap-4 sticky top-0 z-50 nav-blur py-4">
         <button onClick={onBack} className="p-2 -ml-2 text-muted hover:text-app transition-colors">
           <ChevronLeft className="w-6 h-6" />
@@ -2217,51 +2317,81 @@ const AdminPage = ({ onBack }: { onBack: () => void }) => {
           </p>
         </div>
         <div className="glass-card p-8 text-center space-y-2">
-          <p className="text-[10px] uppercase tracking-widest font-bold text-muted">Média de Streak</p>
-          <p className="text-4xl display-bold gold-text">
-            {users.length > 0 ? (users.reduce((acc, u) => acc + (u.streak || 0), 0) / users.length).toFixed(1) : 0}
-          </p>
+          <p className="text-[10px] uppercase tracking-widest font-bold text-muted">Acessos Liberados</p>
+          <p className="text-4xl display-bold gold-text">{dbUsers.length}</p>
         </div>
       </div>
 
-      <div className="glass-card overflow-x-auto">
-        <table className="w-full text-left min-w-[600px]">
-          <thead className="bg-item border-b border-card-border">
-            <tr>
-              <th className="p-6 text-[10px] uppercase tracking-widest font-bold text-muted">Usuário</th>
-              <th className="p-6 text-[10px] uppercase tracking-widest font-bold text-muted">Progresso</th>
-              <th className="p-6 text-[10px] uppercase tracking-widest font-bold text-muted">Streak</th>
-              <th className="p-6 text-[10px] uppercase tracking-widest font-bold text-muted">Último Acesso</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-card-border">
-            {users.map(u => (
-              <tr key={u.id} className="hover:bg-item transition-colors">
-                <td className="p-6">
-                  <p className="font-bold text-sm">{u.name}</p>
-                  <p className="text-[10px] text-muted">{u.email}</p>
-                </td>
-                <td className="p-6">
-                  <div className="flex items-center gap-3">
-                    <div className="w-32 h-2 bg-card rounded-full overflow-hidden">
-                      <div className="h-full bg-gold-500" style={{ width: `${(u.progress / 30) * 100}%` }} />
-                    </div>
-                    <span className="text-xs font-bold">{u.progress}/30</span>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        <section className="glass-card p-8 space-y-6">
+          <div className="flex items-center gap-3">
+            <UserPlus className="w-5 h-5 text-gold-500" />
+            <h3 className="text-lg display-bold">Liberar Acesso Manual</h3>
+          </div>
+          <form onSubmit={handleAddUser} className="space-y-4">
+            <input 
+              type="email" 
+              placeholder="E-mail do Cliente" 
+              className="app-input"
+              value={newEmail}
+              onChange={(e) => setNewEmail(e.target.value)}
+              required
+            />
+            <input 
+              type="text" 
+              placeholder="Nome do Cliente (Opcional)" 
+              className="app-input"
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+            />
+            <Button variant="gold" className="w-full" disabled={adding}>
+              {adding ? 'Liberando...' : 'Liberar Acesso'}
+            </Button>
+          </form>
+
+          <div className="space-y-4 mt-8">
+            <h4 className="text-sm font-bold uppercase tracking-widest text-muted">Acessos Ativos</h4>
+            <div className="space-y-2 max-h-[300px] overflow-y-auto pr-2">
+              {dbUsers.map(u => (
+                <div key={u.email} className="flex items-center justify-between p-3 rounded-xl bg-white/5 border border-white/10">
+                  <div className="flex flex-col">
+                    <span className="text-sm font-bold">{u.name}</span>
+                    <span className="text-[10px] text-muted">{u.email}</span>
                   </div>
-                </td>
-                <td className="p-6">
-                  <div className="flex items-center gap-2 text-gold-500">
-                    <Flame className="w-4 h-4" />
-                    <span className="font-bold">{u.streak || 0}</span>
-                  </div>
-                </td>
-                <td className="p-6 text-xs text-muted">
-                  {u.last_access ? new Date(u.last_access).toLocaleDateString() : 'N/A'}
-                </td>
-              </tr>
+                  <button 
+                    onClick={() => handleRemoveUser(u.email)}
+                    className="p-2 text-red-400 hover:bg-red-400/10 rounded-lg transition-colors"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section className="glass-card p-8 space-y-6">
+          <div className="flex items-center gap-3">
+            <Users className="w-5 h-5 text-gold-500" />
+            <h3 className="text-lg display-bold">Ranking de Progresso</h3>
+          </div>
+          <div className="space-y-4 max-h-[500px] overflow-y-auto pr-2">
+            {users.map((u, i) => (
+              <div key={u.id} className="flex items-center gap-4 p-4 rounded-2xl bg-white/5 border border-white/10 hover:bg-white/10 transition-colors">
+                <div className="w-8 h-8 rounded-full gold-gradient flex items-center justify-center text-white font-bold text-xs">
+                  {i + 1}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-bold truncate">{u.name}</p>
+                  <p className="text-[10px] text-muted uppercase tracking-widest font-bold">Dia {u.progress || 0} • Streak {u.streak || 0}</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-xs font-bold gold-text">{Math.round(((u.progress || 0) / 30) * 100)}%</p>
+                </div>
+              </div>
             ))}
-          </tbody>
-        </table>
+          </div>
+        </section>
       </div>
     </motion.div>
   );
@@ -2722,7 +2852,7 @@ export default function App() {
               onBack={() => setView('home')} 
             />
           )}
-          {view === 'admin' && <AdminPage onBack={() => setView('home')} />}
+          {view === 'admin' && <AdminPage onBack={() => setView('home')} currentUser={user} />}
           {view === 'congratulations' && <CongratulationsPage onBack={() => setView('home')} />}
           {view === 'profile' && user && <ProfilePage user={user} achievements={achievements} onBack={() => setView('home')} onLogout={handleLogout} deferredPrompt={deferredPrompt} onInstall={handleInstall} />}
         </AnimatePresence>

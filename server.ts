@@ -374,6 +374,50 @@ async function startServer() {
     }
   });
 
+  // Manual User Management (Admin Only)
+  app.post("/api/admin/users", (req, res) => {
+    try {
+      const { email, name, adminEmail } = req.body;
+      if (adminEmail !== ADMIN_EMAIL) {
+        return res.status(403).json({ error: "Unauthorized" });
+      }
+      const id = Math.random().toString(36).substring(2, 15);
+      db.prepare("INSERT OR REPLACE INTO users (id, email, name) VALUES (?, ?, ?)").run(id, email.toLowerCase().trim(), name || "Cliente");
+      res.json({ success: true });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: "Erro ao adicionar usuário" });
+    }
+  });
+
+  app.get("/api/admin/db-users", (req, res) => {
+    try {
+      const { adminEmail } = req.query;
+      if (adminEmail !== ADMIN_EMAIL) {
+        return res.status(403).json({ error: "Unauthorized" });
+      }
+      const users = db.prepare("SELECT * FROM users").all();
+      res.json(users);
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: "Erro ao listar usuários" });
+    }
+  });
+
+  app.delete("/api/admin/users/:email", (req, res) => {
+    try {
+      const { adminEmail } = req.query;
+      if (adminEmail !== ADMIN_EMAIL) {
+        return res.status(403).json({ error: "Unauthorized" });
+      }
+      db.prepare("DELETE FROM users WHERE email = ?").run(req.params.email);
+      res.json({ success: true });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: "Erro ao remover usuário" });
+    }
+  });
+
   app.post("/api/user/progress", (req, res) => {
     try {
       const { email, newProgress, newStreak } = req.body;
