@@ -23,7 +23,8 @@ db.exec(`
     plan TEXT DEFAULT 'free',
     streak INTEGER DEFAULT 0,
     progress INTEGER DEFAULT 0,
-    last_access TEXT
+    last_access TEXT,
+    last_completion_date TEXT
   );
   CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 
@@ -220,8 +221,8 @@ async function startServer() {
   app.use(express.json());
 
   // Logging middleware for API routes
-  app.use("/api/*", (req, res, next) => {
-    console.log(`[API Request] ${req.method} ${req.originalUrl}`);
+  app.use("/api", (req, res, next) => {
+    console.log(`[API Request] ${req.method} ${req.path}`);
     next();
   });
 
@@ -253,11 +254,20 @@ async function startServer() {
 
   app.get("/api/days/:id", (req, res) => {
     try {
-      const day = db.prepare("SELECT * FROM days WHERE id = ?").get(req.params.id);
-      res.json(day || null);
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) {
+        return res.status(400).json({ error: "ID inválido" });
+      }
+      
+      const day = db.prepare("SELECT * FROM days WHERE id = ?").get(id);
+      if (!day) {
+        return res.status(404).json({ error: `Dia ${id} não encontrado` });
+      }
+      
+      res.json(day);
     } catch (err) {
-      console.error(err);
-      res.status(500).json({ error: "Failed to fetch day" });
+      console.error("Erro ao buscar dia:", err);
+      res.status(500).json({ error: "Falha ao carregar o dia" });
     }
   });
 
@@ -466,7 +476,7 @@ async function startServer() {
 
   app.post("/api/user/progress", (req, res) => {
     try {
-      const { email, newProgress, newStreak } = req.body;
+      const { email, newProgress, newStreak, lastCompletionDate } = req.body;
       if (!email || newProgress === undefined) {
         return res.status(400).json({ error: "Missing email or progress" });
       }
@@ -477,8 +487,8 @@ async function startServer() {
       const now = new Date();
       
       // Update user with the current timestamp (ISO)
-      db.prepare("UPDATE users SET progress = ?, streak = ?, last_access = ? WHERE email = ?")
-        .run(newProgress, newStreak, now.toISOString(), email);
+      db.prepare("UPDATE users SET progress = ?, streak = ?, last_access = ?, last_completion_date = ? WHERE email = ?")
+        .run(newProgress, newStreak, now.toISOString(), lastCompletionDate || null, email);
 
       // Check for achievements - award all that apply up to current streak
       const achievements = db.prepare("SELECT id, title FROM achievements").all() as any[];

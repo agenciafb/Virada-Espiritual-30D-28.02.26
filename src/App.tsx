@@ -2182,45 +2182,32 @@ export default function App() {
 
     setLoading(true);
     try {
-      const url = `/api/days/${encodeURIComponent(dayId)}`;
+      const url = `/api/days/${dayId}`;
       const res = await fetch(url);
-      const contentType = res.headers.get("content-type");
-
-      if (!res.ok || !contentType || !contentType.includes("application/json")) {
-        throw new Error(`Falha ao carregar o dia (${res.status}) em ${url}`);
+      
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.error || `Falha ao carregar o dia (${res.status})`);
       }
       
       const dayData = await res.json();
+      
+      if (!dayData || typeof dayData !== 'object') {
+        throw new Error("Dados do dia inválidos recebidos do servidor");
+      }
       
       // Save to cache
       localStorage.setItem(`day_${dayId}`, JSON.stringify(dayData));
       
       setCurrentDay(dayData);
       setView('day');
-
-      if (user) {
-        const today = new Date(new Date().getTime() - (new Date().getTimezoneOffset() * 60000)).toISOString().split('T')[0];
-        const checklistRef = doc(db, 'users', user.id, 'checklists', today);
-        try {
-          await setDoc(checklistRef, {
-            user_id: user.id,
-            date: today,
-            mission_status: {
-              devotional: true,
-              prayer: true
-            }
-          }, { merge: true });
-        } catch (err) {
-          handleFirestoreError(err, OperationType.WRITE, `users/${user.id}/checklists/${today}`);
-        }
-      }
     } catch (err: any) {
-      console.error(err);
+      console.error("Erro ao iniciar dia:", err);
       if (cachedDay) {
         setCurrentDay(JSON.parse(cachedDay));
         setView('day');
       } else {
-        alert(err.message || "Erro ao carregar o dia. Tente novamente.");
+        alert(err.message || "Erro ao carregar o conteúdo do dia. Verifique sua conexão.");
       }
     } finally {
       setLoading(false);
@@ -2301,7 +2288,8 @@ export default function App() {
           body: JSON.stringify({
             email: user.email,
             newStreak,
-            newProgress
+            newProgress,
+            lastCompletionDate: todayStr
           })
         });
         const contentType = res.headers.get("content-type");
@@ -2377,14 +2365,17 @@ export default function App() {
     }
   };
 
-  if (loading && !isAuthReady) {
+  if (loading && !currentDay && view === 'home') {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <motion.div 
-          animate={{ rotate: 360 }}
-          transition={{ repeat: Infinity, duration: 1, ease: "linear" }}
-          className="w-10 h-10 border-2 border-gold-500 border-t-transparent rounded-full"
-        />
+      <div className="min-h-screen flex items-center justify-center bg-app">
+        <div className="flex flex-col items-center gap-4">
+          <motion.div 
+            animate={{ rotate: 360 }}
+            transition={{ repeat: Infinity, duration: 1, ease: "linear" }}
+            className="w-10 h-10 border-2 border-gold-500 border-t-transparent rounded-full"
+          />
+          <p className="text-xs font-bold uppercase tracking-widest text-gold-500 animate-pulse">Carregando Jornada...</p>
+        </div>
       </div>
     );
   }
