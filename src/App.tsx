@@ -96,8 +96,21 @@ interface FirestoreErrorInfo {
 }
 
 const handleFirestoreError = (error: unknown, operationType: OperationType, path: string | null) => {
+  const errorMsg = error instanceof Error ? error.message : String(error);
+  
+  // If the error is already a JSON string from handleFirestoreError, just re-throw it
+  try {
+    const parsed = JSON.parse(errorMsg);
+    if (parsed.error && parsed.operationType && parsed.authInfo) {
+      throw error;
+    }
+  } catch (e) {
+    if (e instanceof Error && e.message === errorMsg) throw e;
+    // Not our JSON error, continue
+  }
+
   const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
+    error: errorMsg,
     authInfo: {
       userId: auth.currentUser?.uid,
       email: auth.currentUser?.email,
@@ -2270,6 +2283,32 @@ export default function App() {
   };
 
 
+  useEffect(() => {
+    const preCacheNextDay = async () => {
+      if (user && navigator.onLine) {
+        const nextDayId = user.progress + 1;
+        if (nextDayId <= 30) {
+          const cacheKey = `day_${nextDayId}`;
+          if (!localStorage.getItem(cacheKey)) {
+            try {
+              console.log(`[Pre-cache] Fetching day ${nextDayId}...`);
+              const res = await fetch(`/api/days/${nextDayId}`);
+              if (res.ok) {
+                const data = await res.json();
+                localStorage.setItem(cacheKey, JSON.stringify(data));
+                console.log(`[Pre-cache] Day ${nextDayId} cached successfully`);
+              }
+            } catch (err) {
+              console.warn(`[Pre-cache] Failed to pre-cache day ${nextDayId}`, err);
+            }
+          }
+        }
+      }
+    };
+
+    preCacheNextDay();
+  }, [user?.progress]);
+
   const startDay = async (dayId: number) => {
     if (user) {
       const now = new Date();
@@ -2281,45 +2320,65 @@ export default function App() {
       }
     }
 
-    // Check cache first
+    // Check cache first for immediate availability
     const cachedDay = localStorage.getItem(`day_${dayId}`);
-    if (!navigator.onLine && cachedDay) {
-      setCurrentDay(JSON.parse(cachedDay));
-      setView('day');
-      return;
+    let initialDayData = null;
+    
+    if (cachedDay) {
+      try {
+        initialDayData = JSON.parse(cachedDay);
+        setCurrentDay(initialDayData);
+        setView('day');
+        console.log(`[Cache] Loaded day ${dayId} from localStorage`);
+      } catch (e) {
+        console.error(`[Cache] Error parsing cached day ${dayId}`, e);
+        localStorage.removeItem(`day_${dayId}`);
+      }
     }
 
-    setLoading(true);
-    try {
-      const url = `/api/days/${dayId}`;
-      const res = await fetch(url);
-      
-      if (!res.ok) {
-        const errorData = await res.json().catch(() => ({}));
-        throw new Error(errorData.error || `Falha ao carregar o dia (${res.status})`);
+    // If we don't have cached data, we must show loading
+    if (!initialDayData) {
+      setLoading(true);
+    }
+
+    // If online, always try to refresh/fetch data
+    if (navigator.onLine) {
+      try {
+        const url = `/api/days/${dayId}`;
+        const res = await fetch(url);
+        
+        if (!res.ok) {
+          const errorData = await res.json().catch(() => ({}));
+          throw new Error(errorData.error || `Falha ao carregar o dia (${res.status})`);
+        }
+        
+        const freshDayData = await res.json();
+        
+        if (!freshDayData || typeof freshDayData !== 'object') {
+          throw new Error("Dados do dia inválidos recebidos do servidor");
+        }
+        
+        // Save to cache
+        localStorage.setItem(`day_${dayId}`, JSON.stringify(freshDayData));
+        
+        // Update state if different or if we didn't have initial data
+        if (!initialDayData || JSON.stringify(freshDayData) !== JSON.stringify(initialDayData)) {
+          setCurrentDay(freshDayData);
+          if (!initialDayData) setView('day');
+          console.log(`[Cache] Updated day ${dayId} with fresh data`);
+        }
+      } catch (err: any) {
+        console.error("Erro ao buscar dados atualizados:", err);
+        if (!initialDayData) {
+          alert(err.message || "Erro ao carregar o conteúdo do dia. Verifique sua conexão.");
+        }
+      } finally {
+        setLoading(false);
       }
-      
-      const dayData = await res.json();
-      
-      if (!dayData || typeof dayData !== 'object') {
-        throw new Error("Dados do dia inválidos recebidos do servidor");
-      }
-      
-      // Save to cache
-      localStorage.setItem(`day_${dayId}`, JSON.stringify(dayData));
-      
-      setCurrentDay(dayData);
-      setView('day');
-    } catch (err: any) {
-      console.error("Erro ao iniciar dia:", err);
-      if (cachedDay) {
-        setCurrentDay(JSON.parse(cachedDay));
-        setView('day');
-      } else {
-        alert(err.message || "Erro ao carregar o conteúdo do dia. Verifique sua conexão.");
-      }
-    } finally {
+    } else if (!initialDayData) {
+      // Offline and no cache
       setLoading(false);
+      alert("Você está offline e este dia não está salvo no seu dispositivo.");
     }
   };
 
@@ -2379,14 +2438,16 @@ export default function App() {
       console.log("[Progress] Updating Firestore with progress:", newProgress, "streak:", newStreak);
       try {
         const userRef = doc(db, 'users', user.id);
-        await updateDoc(userRef, {
+        await setDoc(userRef, {
+          name: user.name,
+          email: user.email,
           progress: newProgress,
           streak: newStreak,
           last_access: now.toISOString(),
           last_completion_date: todayStr
-        });
+        }, { merge: true });
       } catch (err) {
-        handleFirestoreError(err, OperationType.UPDATE, `users/${user.id}`);
+        handleFirestoreError(err, OperationType.WRITE, `users/${user.id}`);
       }
 
       // Sync with backend SQLite
