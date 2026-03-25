@@ -303,7 +303,7 @@ const Button = ({
 }: { 
   children: React.ReactNode; 
   onClick?: () => void; 
-  variant?: 'primary' | 'secondary' | 'outline' | 'gold';
+  variant?: 'primary' | 'secondary' | 'outline' | 'gold' | 'ghost';
   className?: string;
   disabled?: boolean;
 }) => {
@@ -311,7 +311,8 @@ const Button = ({
     primary: 'hover:opacity-90',
     secondary: 'hover:opacity-90',
     outline: 'border hover:opacity-90',
-    gold: 'gold-gradient text-white shadow-lg shadow-gold-600/20 hover:opacity-90'
+    gold: 'gold-gradient text-white shadow-lg shadow-gold-600/20 hover:opacity-90',
+    ghost: 'hover:bg-white/10'
   };
 
   const variantStyles = {
@@ -327,7 +328,8 @@ const Button = ({
       borderColor: 'var(--card-border)',
       color: 'var(--text-app)'
     },
-    gold: {}
+    gold: {},
+    ghost: {}
   };
 
   return (
@@ -497,6 +499,7 @@ const HomePage = ({
   onOpenProfile, 
   onOpenDiary,
   onOpenAdmin,
+  onOpenCongratulations,
   theme,
   onToggleTheme,
   deferredPrompt,
@@ -511,6 +514,7 @@ const HomePage = ({
   onOpenProfile: () => void;
   onOpenDiary: () => void;
   onOpenAdmin: () => void;
+  onOpenCongratulations: () => void;
   theme: 'light' | 'dark';
   onToggleTheme: () => void;
   deferredPrompt: any;
@@ -654,6 +658,34 @@ const HomePage = ({
       </header>
 
       <main className="px-6 space-y-8">
+        {user.progress >= 30 && (
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="gold-gradient p-8 rounded-3xl text-white space-y-4 shadow-2xl shadow-gold-500/30 relative overflow-hidden"
+          >
+            <div className="absolute top-0 right-0 p-4 opacity-20">
+              <Trophy className="w-24 h-24 rotate-12" />
+            </div>
+            <div className="relative z-10 space-y-2">
+              <div className="flex items-center gap-2">
+                <Star className="w-4 h-4 fill-white" />
+                <span className="text-[10px] font-bold uppercase tracking-[0.3em]">Jornada de 30 Dias</span>
+              </div>
+              <h3 className="text-2xl display-bold">Parabéns pela Vitória!</h3>
+              <p className="text-sm text-white/80 leading-relaxed max-w-md">
+                Você concluiu os 30 dias de Virada Espiritual. Sua fé foi fortalecida e o Reino celebra sua perseverança.
+              </p>
+              <button 
+                onClick={onOpenCongratulations}
+                className="mt-4 px-6 py-3 bg-white text-gold-600 rounded-xl text-xs font-bold uppercase tracking-widest shadow-lg hover:scale-105 transition-transform"
+              >
+                Ver Próximo Passo
+              </button>
+            </div>
+          </motion.div>
+        )}
+
         {/* Daily Mission */}
         <section className="glass-card p-8 space-y-8">
           <div className="flex items-center justify-between">
@@ -1202,58 +1234,117 @@ const CongratulationsPage = ({ onBack }: { onBack: () => void }) => {
     <motion.div 
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
-      className="min-h-screen flex flex-col items-center justify-center p-8 text-center space-y-12 bg-app"
+      className="min-h-screen bg-app overflow-y-auto pb-20"
     >
-      <div className="relative">
-        <motion.div 
-          animate={{ 
-            scale: [1, 1.1, 1],
-            rotate: [0, 5, -5, 0]
-          }}
-          transition={{ repeat: Infinity, duration: 6, ease: "easeInOut" }}
-          className="w-48 h-48 rounded-full gold-gradient flex items-center justify-center shadow-[0_0_100px_rgba(212,175,55,0.2)]"
-        >
-          <Trophy className="w-24 h-24 text-white" />
-        </motion.div>
-        {[...Array(6)].map((_, i) => (
-          <motion.div
-            key={i}
-            initial={{ opacity: 0, scale: 0 }}
-            animate={{ opacity: [0, 1, 0], scale: [0, 1, 0], y: -100, x: (i - 2.5) * 40 }}
-            transition={{ repeat: Infinity, duration: 2, delay: i * 0.3 }}
-            className="absolute top-1/2 left-1/2"
+      <header className="p-6 flex items-center gap-4 sticky top-0 z-50 nav-blur">
+        <button onClick={onBack} className="p-2 -ml-2 text-muted hover:text-app transition-colors">
+          <ChevronLeft className="w-6 h-6" />
+        </button>
+        <h2 className="text-lg display-bold">Jornada Concluída</h2>
+      </header>
+
+      <main className="max-w-3xl mx-auto px-6 py-12 space-y-16">
+        <div className="relative flex flex-col items-center text-center space-y-8">
+          <motion.div 
+            animate={{ 
+              scale: [1, 1.05, 1],
+              rotate: [0, 2, -2, 0]
+            }}
+            transition={{ repeat: Infinity, duration: 8, ease: "easeInOut" }}
+            className="w-40 h-40 rounded-full gold-gradient flex items-center justify-center shadow-[0_0_80px_rgba(212,175,55,0.15)]"
           >
-            <Star className="w-6 h-6 text-gold-400 fill-gold-400" />
+            <Trophy className="w-20 h-20 text-white" />
           </motion.div>
-        ))}
-      </div>
-
-      <div className="space-y-6 max-w-2xl mx-auto text-center">
-        <h1 className="text-4xl md:text-6xl lg:text-7xl display-bold gold-text">Vitória!</h1>
-        <p className="text-xl md:text-2xl lg:text-3xl serif-italic">Você concluiu os 30 dias da sua jornada espiritual.</p>
-        <p className="text-muted text-lg leading-relaxed max-w-lg mx-auto">
-          Sua dedicação produziu frutos eternos. Este não é o fim, mas o início de uma nova estação de autoridade e propósito em sua vida.
-        </p>
-      </div>
-
-      <div className="w-full max-w-sm mx-auto space-y-6">
-        <Button 
-          variant="gold" 
-          className="w-full py-6 text-xl font-medium shadow-2xl shadow-gold-500/30" 
-          onClick={onBack}
-        >
-          Continuar Navegando
-        </Button>
-        <div className="space-y-2 text-muted">
-          <p className="serif-italic text-sm">"Combati o bom combate, acabei a carreira, guardei a fé."</p>
-          <p className="text-[10px] uppercase tracking-widest font-bold">2 Timóteo 4:7</p>
+          
+          <div className="space-y-4">
+            <h1 className="text-4xl md:text-5xl lg:text-6xl display-bold tracking-tight leading-tight">
+              Parabéns pela Conclusão da sua <span className="gold-text">Jornada de 30 Dias!</span>
+            </h1>
+            <p className="text-xl serif-italic text-muted max-w-2xl mx-auto">
+              "Combati o bom combate, acabei a carreira, guardei a fé." — 2 Timóteo 4:7
+            </p>
+          </div>
         </div>
-      </div>
+
+        <div className="glass-card p-8 md:p-12 space-y-8 leading-relaxed text-lg">
+          <div className="space-y-6">
+            <p>Querido(a) participante,</p>
+            <p>
+              Chegamos ao fim de uma jornada incrível de 30 dias, um período dedicado ao seu crescimento espiritual e à sua conexão com o divino. Cada passo que você deu, cada reflexão que fez e cada momento de oração foram sementes plantadas em seu coração, que certamente florescerão em fé, esperança e amor.
+            </p>
+            <p>
+              Sabemos que a vida é uma jornada contínua, e o cuidado com a sua espiritualidade é um pilar fundamental para uma vida plena e feliz. Por isso, queremos te convidar a dar o próximo passo nessa caminhada de fé.
+            </p>
+          </div>
+
+          <div className="h-px w-full bg-border/50" />
+
+          <div className="space-y-8 pt-4">
+            <div className="space-y-2">
+              <p className="text-[10px] uppercase tracking-[0.3em] font-bold text-gold-600 dark:text-gold-500">Próximo Passo</p>
+              <h2 className="text-2xl md:text-3xl display-bold">Continue sua Jornada com o App "10 Minutos com Deus Pai"</h2>
+            </div>
+            
+            <p className="text-muted">
+              Para que você possa aprofundar ainda mais sua relação com Deus e manter a chama da sua fé acesa diariamente, apresentamos o aplicativo <strong>"10 Minutos com Deus Pai"</strong>.
+            </p>
+
+            <div className="grid md:grid-cols-2 gap-6">
+              {[
+                { title: "Devocionais diários", desc: "Mensagens inspiradoras e reflexões que nutrirão sua alma." },
+                { title: "Momentos de oração", desc: "Guias para você se conectar com Deus em qualquer lugar e a qualquer hora." },
+                { title: "Devocionais Inteligentes (IA)", desc: "Utiliza a API do Google Gemini para gerar reflexões personalizadas baseadas no seu estado emocional." },
+                { title: "Desafios de Fé", desc: "Programas estruturados de 7, 21, 30 e 40 dias focados em criar hábitos espirituais consistentes." },
+                { title: "Bíblia Digital Completa", desc: "Leitura, marcação de versículos e anotações pessoais, tudo sincronizado na nuvem." },
+                { title: "Diário Espiritual", desc: "Um espaço privado para registrar orações, pensamentos e o progresso da jornada cristã." },
+                { title: "Orações Guiadas", desc: "Uma biblioteca de orações prontas para diversos momentos e necessidades." },
+                { title: "Conteúdo exclusivo", desc: "Ferramentas e recursos para fortalecer sua fé e seu propósito de vida." }
+              ].map((item, i) => (
+                <div key={i} className="space-y-2 p-4 rounded-2xl bg-white/5 border border-white/10">
+                  <h4 className="font-bold text-sm uppercase tracking-wider gold-text">{item.title}</h4>
+                  <p className="text-sm text-muted leading-relaxed">{item.desc}</p>
+                </div>
+              ))}
+            </div>
+
+            <div className="space-y-6 pt-4">
+              <p className="text-center italic">
+                Não deixe que a rotina apague o brilho da sua fé. Invista 10 minutos do seu dia para estar mais perto de Deus e experimentar uma transformação profunda em sua vida.
+              </p>
+              
+              <div className="flex flex-col items-center gap-4">
+                <Button 
+                  variant="gold" 
+                  className="w-full max-w-md py-8 text-lg font-bold shadow-xl shadow-gold-500/20"
+                  onClick={() => window.open('https://pagina-10m-com-deus-pai-pro.vercel.app/', '_blank')}
+                >
+                  Continuar minha Jornada Agora
+                </Button>
+                <p className="text-xs text-muted uppercase tracking-widest font-bold">"10 Minutos com Deus Pai"</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="text-center space-y-4 pt-8">
+          <p className="serif-italic text-xl">Que Deus continue abençoando sua vida e iluminando seus passos!</p>
+          <div className="space-y-1">
+            <p className="text-sm font-bold uppercase tracking-widest">Com carinho,</p>
+            <p className="text-muted">A Equipe Método Virada Espiritual 30 Dias</p>
+          </div>
+        </div>
+
+        <div className="flex justify-center pt-12">
+          <Button variant="ghost" onClick={onBack} className="text-muted hover:text-app">
+            Voltar para o Início
+          </Button>
+        </div>
+      </main>
     </motion.div>
   );
 };
 
-const ProfilePage = ({ user, achievements, onBack, onLogout, deferredPrompt, onInstall }: { user: User; achievements: any[]; onBack: () => void; onLogout: () => void; deferredPrompt: any; onInstall: () => void }) => {
+const ProfilePage = ({ user, achievements, onBack, onLogout, deferredPrompt, onInstall, onOpenCongratulations }: { user: User; achievements: any[]; onBack: () => void; onLogout: () => void; deferredPrompt: any; onInstall: () => void; onOpenCongratulations: () => void }) => {
   const [pushStatus, setPushStatus] = useState<'default' | 'granted' | 'denied' | 'loading'>('loading');
   const [loading, setLoading] = useState(false);
   const [showInstallGuide, setShowInstallGuide] = useState(false);
@@ -1472,6 +1563,24 @@ const ProfilePage = ({ user, achievements, onBack, onLogout, deferredPrompt, onI
                 </div>
                 <ChevronRight className="w-5 h-5 text-muted group-hover:translate-x-1 transition-all opacity-30" />
               </button>
+
+              {user.progress >= 30 && (
+                <button 
+                  onClick={onOpenCongratulations}
+                  className="w-full gold-gradient p-6 rounded-2xl text-white flex items-center justify-between group shadow-xl shadow-gold-500/20"
+                >
+                  <div className="flex items-center gap-4">
+                    <div className="w-10 h-10 rounded-xl bg-white/20 flex items-center justify-center">
+                      <Trophy className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <span className="font-bold uppercase tracking-widest text-sm block">Jornada Concluída</span>
+                      <span className="text-[10px] text-white/70 uppercase tracking-widest font-bold">Ver Mensagem de Vitória</span>
+                    </div>
+                  </div>
+                  <ChevronRight className="w-5 h-5 text-white group-hover:translate-x-1 transition-all opacity-50" />
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -2397,6 +2506,7 @@ export default function App() {
               onOpenProfile={() => setView('profile')}
               onOpenDiary={() => setView('diary')}
               onOpenAdmin={() => setView('admin')}
+              onOpenCongratulations={() => setView('congratulations')}
               theme={theme}
               onToggleTheme={toggleTheme}
               deferredPrompt={deferredPrompt}
@@ -2423,7 +2533,17 @@ export default function App() {
           )}
           {view === 'admin' && <AdminPage onBack={() => setView('home')} currentUser={user} />}
           {view === 'congratulations' && <CongratulationsPage onBack={() => setView('home')} />}
-          {view === 'profile' && user && <ProfilePage user={user} achievements={achievements} onBack={() => setView('home')} onLogout={handleLogout} deferredPrompt={deferredPrompt} onInstall={handleInstall} />}
+          {view === 'profile' && user && (
+            <ProfilePage 
+              user={user} 
+              achievements={achievements} 
+              onBack={() => setView('home')} 
+              onLogout={handleLogout} 
+              deferredPrompt={deferredPrompt} 
+              onInstall={handleInstall}
+              onOpenCongratulations={() => setView('congratulations')}
+            />
+          )}
         </AnimatePresence>
 
         {/* Navigation Bar */}
