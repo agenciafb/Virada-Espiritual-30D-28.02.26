@@ -517,7 +517,8 @@ const HomePage = ({
   onToggleTheme,
   deferredPrompt,
   onInstall,
-  isOnline
+  isOnline,
+  cachedDaysCount
 }: { 
   user: User; 
   onStartDay: (dayId: number) => void;
@@ -533,6 +534,7 @@ const HomePage = ({
   deferredPrompt: any;
   onInstall: () => void;
   isOnline: boolean;
+  cachedDaysCount: number;
 }) => {
   const [dailyDeclaration, setDailyDeclaration] = useState<Declaration | null>(null);
   const [mission, setMission] = useState({
@@ -642,10 +644,18 @@ const HomePage = ({
           <h2 className="text-2xl md:text-3xl display-bold">Olá, <span className="serif-italic gold-text">{user.name.split(' ')[0]}</span></h2>
         </div>
         <div className="flex items-center gap-2">
+          {isOnline && (
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
+              <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              <span className="text-[10px] font-bold uppercase tracking-widest">
+                {cachedDaysCount} Dias Offline
+              </span>
+            </div>
+          )}
           {!isOnline && (
             <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-red-500/10 text-red-500 border border-red-500/20">
               <WifiOff className="w-3 h-3" />
-              <span className="text-[10px] font-bold uppercase tracking-widest">Offline</span>
+              <span className="text-[10px] font-bold uppercase tracking-widest">Offline ({cachedDaysCount} Salvos)</span>
             </div>
           )}
           {user.email === 'fbassistecjari@gmail.com' && (
@@ -2169,6 +2179,7 @@ export default function App() {
   const [isAuthReady, setIsAuthReady] = useState(true);
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [cachedDaysCount, setCachedDaysCount] = useState(0);
 
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
@@ -2204,6 +2215,22 @@ export default function App() {
     console.log(`[PWA] User response to the install prompt: ${outcome}`);
     setDeferredPrompt(null);
   };
+
+  useEffect(() => {
+    const countCachedDays = () => {
+      let count = 0;
+      for (let i = 1; i <= 30; i++) {
+        if (localStorage.getItem(`day_${i}`)) {
+          count++;
+        }
+      }
+      setCachedDaysCount(count);
+    };
+    countCachedDays();
+    // Also update when storage changes (e.g. from other tabs or our own logic)
+    window.addEventListener('storage', countCachedDays);
+    return () => window.removeEventListener('storage', countCachedDays);
+  }, []);
 
   useEffect(() => {
     // Auth logic removed to start from zero
@@ -2284,29 +2311,39 @@ export default function App() {
 
 
   useEffect(() => {
-    const preCacheNextDay = async () => {
+    const preCacheNextDays = async () => {
       if (user && navigator.onLine) {
-        const nextDayId = user.progress + 1;
-        if (nextDayId <= 30) {
-          const cacheKey = `day_${nextDayId}`;
-          if (!localStorage.getItem(cacheKey)) {
-            try {
-              console.log(`[Pre-cache] Fetching day ${nextDayId}...`);
-              const res = await fetch(`/api/days/${nextDayId}`);
-              if (res.ok) {
-                const data = await res.json();
-                localStorage.setItem(cacheKey, JSON.stringify(data));
-                console.log(`[Pre-cache] Day ${nextDayId} cached successfully`);
+        // Pre-cache next 7 days
+        for (let i = 1; i <= 7; i++) {
+          const nextDayId = user.progress + i;
+          if (nextDayId <= 30) {
+            const cacheKey = `day_${nextDayId}`;
+            if (!localStorage.getItem(cacheKey)) {
+              try {
+                console.log(`[Pre-cache] Fetching day ${nextDayId}...`);
+                const res = await fetch(`/api/days/${nextDayId}`);
+                if (res.ok) {
+                  const data = await res.json();
+                  localStorage.setItem(cacheKey, JSON.stringify(data));
+                  console.log(`[Pre-cache] Day ${nextDayId} cached successfully`);
+                  
+                  // Update count
+                  let count = 0;
+                  for (let j = 1; j <= 30; j++) {
+                    if (localStorage.getItem(`day_${j}`)) count++;
+                  }
+                  setCachedDaysCount(count);
+                }
+              } catch (err) {
+                console.warn(`[Pre-cache] Failed to pre-cache day ${nextDayId}`, err);
               }
-            } catch (err) {
-              console.warn(`[Pre-cache] Failed to pre-cache day ${nextDayId}`, err);
             }
           }
         }
       }
     };
 
-    preCacheNextDay();
+    preCacheNextDays();
   }, [user?.progress]);
 
   const startDay = async (dayId: number) => {
@@ -2521,6 +2558,17 @@ export default function App() {
       // Re-fetch achievements to update UI
       await fetchAchievements();
 
+      // Update local state
+      if (user) {
+        setUser({
+          ...user,
+          progress: newProgress,
+          streak: newStreak,
+          last_access: now.toISOString(),
+          last_completion_date: todayStr
+        });
+      }
+
       console.log("Day completion successful. Navigating...");
       if (newProgress >= 30) {
         setView('congratulations');
@@ -2573,6 +2621,7 @@ export default function App() {
               deferredPrompt={deferredPrompt}
               onInstall={handleInstall}
               isOnline={isOnline}
+              cachedDaysCount={cachedDaysCount}
             />
           )}
           {view === 'day' && currentDay && user && (
