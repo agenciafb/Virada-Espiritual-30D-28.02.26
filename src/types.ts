@@ -7,6 +7,8 @@ export interface User {
   progress: number;
   last_access: string;
   last_completion_date?: string;
+  onboarding_step?: number;
+  commitment_accepted?: boolean;
 }
 
 export interface Day {

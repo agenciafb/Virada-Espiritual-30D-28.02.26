@@ -9,10 +9,17 @@
         "email": { "type": "string", "format": "email" },
         "name": { "type": "string" },
         "plan": { "type": "string", "enum": ["free", "premium"] },
+        "role": { "type": "string", "enum": ["user", "admin"] },
         "streak": { "type": "integer" },
         "progress": { "type": "integer" },
         "last_access": { "type": "string", "format": "date-time" },
-        "last_completion_date": { "type": "string", "format": "date" }
+        "last_completion_date": { "type": "string", "format": "date" },
+        "hasAccess": { "type": "boolean" },
+        "accessExpiresAt": { "type": "string", "format": "date-time" },
+        "isSubscriber": { "type": "boolean" },
+        "subscriptionType": { "type": "string", "enum": ["monthly", "annual"] },
+        "subscriptionStatus": { "type": "string", "enum": ["active", "canceled"] },
+        "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["id", "email", "name"]
     },
@@ -62,9 +69,100 @@
         "earned_at": { "type": "string", "format": "date-time" }
       },
       "required": ["user_id", "achievement_id", "earned_at"]
+    },
+    "Day": {
+      "title": "Day",
+      "description": "Daily content for the 30-day journey",
+      "type": "object",
+      "properties": {
+        "id": { "type": "integer" },
+        "title": { "type": "string" },
+        "verse": { "type": "string" },
+        "reflection": { "type": "string" },
+        "application": { "type": "string" },
+        "exercise": { "type": "string" },
+        "declaration": { "type": "string" }
+      },
+      "required": ["id", "title", "verse", "reflection", "application", "exercise", "declaration"]
+    },
+    "Prayer": {
+      "title": "Prayer",
+      "description": "Prayer content by category",
+      "type": "object",
+      "properties": {
+        "id": { "type": "integer" },
+        "category": { "type": "string" },
+        "title": { "type": "string" },
+        "content": { "type": "string" },
+        "declaration": { "type": "string" }
+      },
+      "required": ["id", "category", "title", "content", "declaration"]
+    },
+    "Declaration": {
+      "title": "Declaration",
+      "description": "Biblical declaration",
+      "type": "object",
+      "properties": {
+        "id": { "type": "integer" },
+        "content": { "type": "string" },
+        "reference": { "type": "string" }
+      },
+      "required": ["id", "content", "reference"]
+    },
+    "ScheduledMessage": {
+      "title": "ScheduledMessage",
+      "description": "A message scheduled to be sent as a push notification",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "body": { "type": "string" },
+        "scheduled_at": { "type": "string", "format": "date-time" },
+        "sent": { "type": "boolean" },
+        "target_user_id": { "type": "string", "description": "Optional target user ID, if null sends to all" }
+      },
+      "required": ["title", "body", "scheduled_at", "sent"]
+    },
+    "WebhookLog": {
+      "title": "WebhookLog",
+      "description": "Log of incoming webhooks",
+      "type": "object",
+      "properties": {
+        "provider": { "type": "string" },
+        "payload": { "type": "object" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["provider", "payload", "timestamp"]
+    },
+    "Event": {
+      "title": "Event",
+      "description": "User tracking event",
+      "type": "object",
+      "properties": {
+        "eventName": { "type": "string" },
+        "userId": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "metadata": { "type": "object" }
+      },
+      "required": ["eventName", "userId", "timestamp"]
     }
   },
   "firestore": {
+    "/days/{dayId}": {
+      "schema": "Day",
+      "description": "Daily journey content"
+    },
+    "/prayers/{prayerId}": {
+      "schema": "Prayer",
+      "description": "Prayer library"
+    },
+    "/declarations/{declarationId}": {
+      "schema": "Declaration",
+      "description": "Declaration library"
+    },
+    "/scheduled_messages/{messageId}": {
+      "schema": "ScheduledMessage",
+      "description": "Queue for push notifications"
+    },
     "/users/{userId}": {
       "schema": "User",
       "description": "User profiles"
@@ -84,6 +182,14 @@
     "/users/{userId}/achievements/{achievementId}": {
       "schema": "Achievement",
       "description": "User earned achievements"
+    },
+    "/webhook_logs/{logId}": {
+      "schema": "WebhookLog",
+      "description": "Logs for external webhooks"
+    },
+    "/events/{eventId}": {
+      "schema": "Event",
+      "description": "User tracking events"
     }
   }
 }

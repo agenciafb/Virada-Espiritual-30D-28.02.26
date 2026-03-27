@@ -70,11 +70,74 @@ import {
   Timestamp,
   orderBy,
   limit,
-  addDoc
+  addDoc,
+  writeBatch,
+  deleteDoc
 } from 'firebase/firestore';
 import { auth, db, googleProvider, appleProvider } from './firebase';
 
 // --- Types & Enums ---
+
+declare global {
+  interface Window {
+    gtag?: (...args: any[]) => void;
+    fbq?: (...args: any[]) => void;
+  }
+}
+
+const trackEvent = async (eventName: string, userId: string | null, metadata: any = {}) => {
+  try {
+    const timestamp = new Date().toISOString();
+    
+    // 1. Store in Firestore
+    if (userId) {
+      await addDoc(collection(db, 'events'), {
+        eventName,
+        userId,
+        timestamp,
+        metadata
+      });
+    }
+
+    // 2. Google Analytics (GA4)
+    if (window.gtag) {
+      window.gtag('event', eventName, {
+        user_id: userId,
+        ...metadata
+      });
+    }
+
+    // 3. Meta Pixel
+    if (window.fbq) {
+      window.fbq('trackCustom', eventName, metadata);
+      
+      // Standard events mapping
+      if (eventName === 'purchase_completed') window.fbq('track', 'Purchase', metadata);
+      if (eventName === 'checkout_started') window.fbq('track', 'InitiateCheckout', metadata);
+      if (eventName === 'paywall_viewed') window.fbq('track', 'ViewContent', metadata);
+    }
+
+    // 4. Meta Conversion API (Server-side)
+    if (userId && (eventName === 'purchase_completed' || eventName === 'subscription_started')) {
+      const userDoc = await getDoc(doc(db, 'users', userId));
+      const email = userDoc.exists() ? userDoc.data().email : null;
+      
+      if (email) {
+        await fetch('/api/track-meta-event', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            event_name: eventName === 'subscription_started' ? 'Subscribe' : 'Purchase',
+            email,
+            metadata
+          })
+        });
+      }
+    }
+  } catch (error) {
+    console.error(`Error tracking event ${eventName}:`, error);
+  }
+};
 
 enum OperationType {
   CREATE = 'create',
@@ -512,6 +575,235 @@ const DAILY_PHRASES = [
   "Hoje é dia de ver a glória de Deus."
 ];
 
+const OnboardingFlow = ({ user, onComplete }: { user: User, onComplete: (step: number, commitment?: boolean) => void }) => {
+  const [step, setStep] = useState(user.onboarding_step || 1);
+  const [commitment, setCommitment] = useState({
+    complete30: false,
+    followDaily: false,
+    stayFirm: false
+  });
+
+  const allChecked = commitment.complete30 && commitment.followDaily && commitment.stayFirm;
+
+  if (step === 1) {
+    return (
+      <motion.div 
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        className="min-h-screen bg-app flex flex-col items-center justify-center p-8 text-center space-y-8"
+      >
+        <div className="w-20 h-20 gold-gradient rounded-3xl flex items-center justify-center shadow-2xl shadow-gold-500/20">
+          <Flame className="w-10 h-10 text-white" />
+        </div>
+        <div className="space-y-4">
+          <h1 className="text-3xl md:text-5xl display-bold leading-tight">
+            Você começou algo que pode <span className="gold-text">mudar sua vida.</span>
+          </h1>
+          <p className="text-lg text-muted serif-italic">
+            Poucos chegam até aqui. Menos ainda terminam.
+          </p>
+        </div>
+        <p className="text-sm text-muted leading-relaxed max-w-md">
+          Durante os próximos 30 dias, você vai construir uma rotina espiritual forte, consistente e real.
+        </p>
+        <button 
+          onClick={() => onComplete(2)}
+          className="w-full max-w-xs py-4 rounded-2xl gold-gradient text-white font-bold shadow-xl shadow-gold-500/20 hover:scale-105 active:scale-95 transition-all"
+        >
+          Começar agora
+        </button>
+      </motion.div>
+    );
+  }
+
+  if (step === 2) {
+    return (
+      <motion.div 
+        initial={{ opacity: 0, x: 20 }}
+        animate={{ opacity: 1, x: 0 }}
+        className="min-h-screen bg-app flex flex-col items-center justify-center p-8 text-center space-y-12"
+      >
+        <div className="space-y-4">
+          <h2 className="text-2xl md:text-4xl display-bold">
+            Antes de começar, faça um <span className="gold-text">acordo consigo mesmo.</span>
+          </h2>
+        </div>
+
+        <div className="w-full max-w-md space-y-4">
+          {[
+            { id: 'complete30', label: 'Vou completar os 30 dias' },
+            { id: 'followDaily', label: 'Vou seguir as práticas diárias' },
+            { id: 'stayFirm', label: 'Vou me manter firme mesmo nos dias difíceis' }
+          ].map((item) => (
+            <button
+              key={item.id}
+              onClick={() => setCommitment(prev => ({ ...prev, [item.id]: !prev[item.id as keyof typeof commitment] }))}
+              className={`w-full p-6 rounded-2xl border flex items-center gap-4 transition-all ${
+                commitment[item.id as keyof typeof commitment] 
+                  ? 'bg-gold-500/10 border-gold-500/50 text-gold-500' 
+                  : 'bg-white/5 border-white/10 text-muted'
+              }`}
+            >
+              <div className={`w-6 h-6 rounded-lg border-2 flex items-center justify-center transition-all ${
+                commitment[item.id as keyof typeof commitment] 
+                  ? 'bg-gold-500 border-gold-500 text-white' 
+                  : 'border-white/20'
+              }`}>
+                {commitment[item.id as keyof typeof commitment] && <Check className="w-4 h-4" />}
+              </div>
+              <span className="font-bold text-sm text-left">{item.label}</span>
+            </button>
+          ))}
+        </div>
+
+        <button 
+          disabled={!allChecked}
+          onClick={() => {
+            trackEvent('quiz_completed', user.id);
+            onComplete(3, true);
+          }}
+          className="w-full max-w-xs py-4 rounded-2xl gold-gradient text-white font-bold shadow-xl shadow-gold-500/20 hover:scale-105 active:scale-95 transition-all disabled:opacity-50 disabled:grayscale"
+        >
+          Assumir compromisso
+        </button>
+      </motion.div>
+    );
+  }
+
+  return null;
+};
+
+const Paywall = ({ user, onBack }: { user: User, onBack: () => void }) => {
+  useEffect(() => {
+    trackEvent('paywall_viewed', user.id);
+  }, [user.id]);
+
+  const handleKiwifyClick = (plan: string) => {
+    trackEvent('paywall_clicked', user.id, { plan });
+    trackEvent('checkout_started', user.id, { plan });
+    window.open('https://pay.kiwify.com.br/zg75zYX', '_blank');
+  };
+
+  return (
+    <motion.div 
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      className="min-h-screen bg-app pb-20"
+    >
+      <header className="p-6 flex items-center justify-between sticky top-0 z-50 nav-blur">
+        <button onClick={onBack} className="p-2 -ml-2 text-muted hover:text-app transition-colors">
+          <ChevronLeft className="w-6 h-6" />
+        </button>
+        <div className="text-[10px] font-bold uppercase tracking-[0.3em] gold-text">Plano Premium</div>
+        <div className="w-10" />
+      </header>
+
+      <main className="px-6 space-y-12 max-w-2xl mx-auto">
+        {/* Top Impact */}
+        <div className="text-center space-y-4 pt-8">
+          <h1 className="text-4xl md:text-5xl display-bold leading-tight">
+            Seu crescimento <span className="gold-text">não termina aqui.</span>
+          </h1>
+          <div className="flex items-center justify-center gap-4">
+            <div className="glass-card px-4 py-2 rounded-full">
+              <span className="text-[10px] font-bold uppercase tracking-widest text-gold-500">30 Dias Concluídos</span>
+            </div>
+            <div className="glass-card px-4 py-2 rounded-full">
+              <span className="text-[10px] font-bold uppercase tracking-widest text-emerald-500">100% Finalizado</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Value Block */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {[
+            { icon: Calendar, title: "Conteúdo semanal", desc: "Novas jornadas toda semana" },
+            { icon: Volume2, title: "Áudios guiados", desc: "Áudios exclusivos e profundos" },
+            { icon: Zap, title: "Jornada contínua", desc: "Evolução contínua sem parar" },
+            { icon: Trophy, title: "Acesso vital", desc: "Crescimento espiritual constante" }
+          ].map((item, i) => (
+            <div key={i} className="glass-card p-6 flex items-start gap-4">
+              <div className="w-10 h-10 rounded-xl bg-gold-500/10 flex items-center justify-center text-gold-500 shrink-0">
+                <item.icon className="w-5 h-5" />
+              </div>
+              <div className="space-y-1">
+                <h4 className="font-bold text-sm uppercase tracking-wider">{item.title}</h4>
+                <p className="text-xs text-muted leading-relaxed">{item.desc}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Plans */}
+        <div className="space-y-4">
+          {/* Annual */}
+          <button 
+            onClick={() => handleKiwifyClick('annual')}
+            className="w-full p-8 rounded-3xl bg-gradient-to-br from-gold-500/20 to-transparent border-2 border-gold-500 shadow-2xl shadow-gold-500/20 text-left relative group overflow-hidden"
+          >
+            <div className="absolute top-4 right-4 px-3 py-1 rounded-full bg-gold-500 text-white text-[8px] font-bold uppercase tracking-widest">
+              Melhor escolha
+            </div>
+            <div className="space-y-4">
+              <div>
+                <h3 className="text-2xl display-bold">Plano Anual</h3>
+                <p className="text-xs text-muted font-bold uppercase tracking-widest">Menos de R$0,30 por dia</p>
+              </div>
+              <div className="flex items-center justify-between">
+                <div className="text-3xl display-bold">R$ 97,00</div>
+                <div className="w-12 h-12 rounded-full gold-gradient flex items-center justify-center text-white group-hover:scale-110 transition-transform">
+                  <ArrowRight className="w-6 h-6" />
+                </div>
+              </div>
+            </div>
+          </button>
+
+          {/* Monthly */}
+          <button 
+            onClick={() => handleKiwifyClick('monthly')}
+            className="w-full p-8 rounded-3xl glass-card border-white/10 text-left group"
+          >
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-xl display-bold">Plano Mensal</h3>
+                <p className="text-[10px] text-muted font-bold uppercase tracking-widest">Acesso mês a mês</p>
+              </div>
+              <div className="text-2xl display-bold text-muted">R$ 19,90</div>
+            </div>
+          </button>
+        </div>
+
+        {/* Proof */}
+        <div className="glass-card p-6 text-center space-y-4 italic text-muted text-sm">
+          <p>"Depois dos 30 dias, isso virou parte da minha vida. O conteúdo premium é o que me mantém firme."</p>
+          <div className="flex items-center justify-center gap-2 not-italic">
+            <div className="w-6 h-6 rounded-full bg-gold-500/20 flex items-center justify-center text-[10px] font-bold text-gold-500">M</div>
+            <span className="text-[10px] font-bold uppercase tracking-widest">Mariana S.</span>
+          </div>
+        </div>
+
+        {/* Guarantee */}
+        <div className="flex flex-col items-center gap-2 text-muted">
+          <ShieldCheck className="w-6 h-6 opacity-50" />
+          <p className="text-[10px] font-bold uppercase tracking-widest">7 dias de garantia total</p>
+        </div>
+
+        {/* Final CTA */}
+        <button 
+          onClick={() => handleKiwifyClick('cta_final')}
+          className="w-full py-6 rounded-2xl gold-gradient text-white font-bold text-lg shadow-2xl shadow-gold-500/20 hover:scale-[1.02] active:scale-[0.98] transition-all"
+        >
+          Continuar minha jornada
+        </button>
+        
+        <p className="text-center text-[10px] text-muted font-bold uppercase tracking-widest">
+          Essa condição especial é válida apenas hoje.
+        </p>
+      </main>
+    </motion.div>
+  );
+};
+
 const HomePage = ({ 
   user, 
   onStartDay, 
@@ -527,7 +819,8 @@ const HomePage = ({
   deferredPrompt,
   onInstall,
   isOnline,
-  cachedDaysCount
+  cachedDaysCount,
+  declarations
 }: { 
   user: User; 
   onStartDay: (dayId: number) => void;
@@ -544,6 +837,7 @@ const HomePage = ({
   onInstall: () => void;
   isOnline: boolean;
   cachedDaysCount: number;
+  declarations: Declaration[];
 }) => {
   const [dailyDeclaration, setDailyDeclaration] = useState<Declaration | null>(null);
   const [mission, setMission] = useState({
@@ -569,19 +863,24 @@ const HomePage = ({
   const isDayCompletedToday = user.last_completion_date === today;
 
   useEffect(() => {
-    fetch('/api/declarations')
-      .then(res => {
-        const contentType = res.headers.get("content-type");
-        if (res.ok && contentType && contentType.includes("application/json")) {
-          return res.json();
-        }
-        throw new Error(`Failed to load declarations (${res.status})`);
-      })
-      .then(data => {
-        const currentDayDecl = data.find((d: any) => d.id === (user.progress + 1)) || data[0];
-        setDailyDeclaration(currentDayDecl);
-      })
-      .catch(err => console.error(err));
+    if (declarations.length > 0) {
+      const currentDayDecl = declarations.find((d: any) => d.id === (user.progress + 1)) || declarations[0];
+      setDailyDeclaration(currentDayDecl);
+    } else {
+      fetch('/api/declarations')
+        .then(res => {
+          const contentType = res.headers.get("content-type");
+          if (res.ok && contentType && contentType.includes("application/json")) {
+            return res.json();
+          }
+          throw new Error(`Failed to load declarations (${res.status})`);
+        })
+        .then(data => {
+          const currentDayDecl = data.find((d: any) => d.id === (user.progress + 1)) || data[0];
+          setDailyDeclaration(currentDayDecl);
+        })
+        .catch(err => console.error(err));
+    }
 
     // Load mission status from Firestore
     if (user.id) {
@@ -690,6 +989,42 @@ const HomePage = ({
       </header>
 
       <main className="px-6 space-y-8">
+        {/* Day 7/15 Special Screens */}
+        {(user.progress === 7 || user.progress === 15) && !localStorage.getItem(`special_seen_${user.progress}`) && (
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="fixed inset-0 z-[100] bg-black/90 backdrop-blur-xl flex items-center justify-center p-8"
+          >
+            <div className="max-w-md w-full space-y-8 text-center">
+              <div className="w-24 h-24 mx-auto gold-gradient rounded-3xl flex items-center justify-center shadow-2xl shadow-gold-500/40">
+                <Star className="w-12 h-12 text-white" />
+              </div>
+              <div className="space-y-4">
+                <h2 className="text-3xl md:text-4xl display-bold leading-tight">
+                  {user.progress === 7 ? "Você já está à frente de 80% das pessoas." : "Você está transformando sua realidade."}
+                </h2>
+                <p className="text-lg text-muted serif-italic">
+                  {user.progress === 7 ? "Mas existe um nível mais profundo que poucos alcançam..." : "O compromisso que você assumiu está gerando frutos eternos."}
+                </p>
+              </div>
+              <div className="space-y-6">
+                <p className="text-sm text-muted leading-relaxed">
+                  {user.progress === 7 ? "Continue. Você está mais perto do que imagina." : "Sua jornada não é apenas sobre 30 dias, é sobre uma vida inteira de propósito."}
+                </p>
+                <button 
+                  onClick={() => {
+                    localStorage.setItem(`special_seen_${user.progress}`, 'true');
+                    window.location.reload();
+                  }}
+                  className="w-full py-4 rounded-2xl gold-gradient text-white font-bold shadow-xl shadow-gold-500/20"
+                >
+                  Continuar Jornada
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        )}
         {user.progress >= 30 && (
           <motion.div 
             initial={{ opacity: 0, scale: 0.9 }}
@@ -714,6 +1049,43 @@ const HomePage = ({
               >
                 Ver Próximo Passo
               </button>
+            </div>
+          </motion.div>
+        )}
+
+        {/* Day 7/15 Special Screens */}
+        {(user.progress === 7 || user.progress === 15) && !localStorage.getItem(`special_seen_${user.progress}`) && (
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="fixed inset-0 z-[100] bg-black/90 backdrop-blur-xl flex items-center justify-center p-8"
+          >
+            <div className="max-w-md w-full space-y-8 text-center">
+              <div className="w-24 h-24 mx-auto gold-gradient rounded-3xl flex items-center justify-center shadow-2xl shadow-gold-500/40">
+                <Star className="w-12 h-12 text-white" />
+              </div>
+              <div className="space-y-4">
+                <h2 className="text-3xl md:text-4xl display-bold leading-tight">
+                  {user.progress === 7 ? "Você já está à frente de 80% das pessoas." : "Você está transformando sua realidade."}
+                </h2>
+                <p className="text-lg text-muted serif-italic">
+                  {user.progress === 7 ? "Mas existe um nível mais profundo que poucos alcançam..." : "O compromisso que você assumiu está gerando frutos eternos."}
+                </p>
+              </div>
+              <div className="space-y-6">
+                <p className="text-sm text-muted leading-relaxed">
+                  {user.progress === 7 ? "Continue. Você está mais perto do que imagina." : "Sua jornada não é apenas sobre 30 dias, é sobre uma vida inteira de propósito."}
+                </p>
+                <button 
+                  onClick={() => {
+                    localStorage.setItem(`special_seen_${user.progress}`, 'true');
+                    window.location.reload();
+                  }}
+                  className="w-full py-4 rounded-2xl gold-gradient text-white font-bold shadow-xl shadow-gold-500/20"
+                >
+                  Continuar Jornada
+                </button>
+              </div>
             </div>
           </motion.div>
         )}
@@ -1111,23 +1483,9 @@ const DayDetail = ({
   );
 };
 
-const CrisisMode = ({ onBack }: { onBack: () => void }) => {
+const CrisisMode = ({ onBack, prayers }: { onBack: () => void, prayers: Prayer[] }) => {
   const [selectedPrayer, setSelectedPrayer] = useState<Prayer | null>(null);
-  const [prayers, setPrayers] = useState<Prayer[]>([]);
   const categories = ["Ansiedade", "Medo", "Desânimo", "Ataque Espiritual", "Confusão", "Financeiro", "Família"];
-
-  useEffect(() => {
-    fetch('/api/prayers')
-      .then(res => {
-        const contentType = res.headers.get("content-type");
-        if (res.ok && contentType && contentType.includes("application/json")) {
-          return res.json();
-        }
-        throw new Error(`Failed to load prayers (${res.status})`);
-      })
-      .then(data => setPrayers(data || []))
-      .catch(err => console.error(err));
-  }, []);
 
   const getPrayerByCategory = (cat: string) => {
     return prayers.find(p => p.category === cat) || prayers[0];
@@ -1216,22 +1574,7 @@ const CrisisMode = ({ onBack }: { onBack: () => void }) => {
   );
 };
 
-const DeclarationsPage = ({ onBack }: { onBack: () => void }) => {
-  const [declarations, setDeclarations] = useState<any[]>([]);
-
-  useEffect(() => {
-    fetch('/api/declarations')
-      .then(res => {
-        const contentType = res.headers.get("content-type");
-        if (res.ok && contentType && contentType.includes("application/json")) {
-          return res.json();
-        }
-        throw new Error(`Failed to load declarations (${res.status})`);
-      })
-      .then(data => setDeclarations(data || []))
-      .catch(err => console.error(err));
-  }, []);
-
+const DeclarationsPage = ({ onBack, declarations }: { onBack: () => void, declarations: Declaration[] }) => {
   const handleShare = (decl: any) => {
     if (navigator.share) {
       navigator.share({
@@ -1408,7 +1751,7 @@ const CongratulationsPage = ({ onBack }: { onBack: () => void }) => {
   );
 };
 
-const ProfilePage = ({ user, achievements, onBack, onLogout, deferredPrompt, onInstall, onOpenCongratulations }: { user: User; achievements: any[]; onBack: () => void; onLogout: () => void; deferredPrompt: any; onInstall: () => void; onOpenCongratulations: () => void }) => {
+const ProfilePage = ({ user, achievements, onBack, onLogout, deferredPrompt, onInstall, onOpenCongratulations, showLegal, setShowLegal }: { user: User; achievements: any[]; onBack: () => void; onLogout: () => void; deferredPrompt: any; onInstall: () => void; onOpenCongratulations: () => void; showLegal: { open: boolean, type: 'terms' | 'privacy' }; setShowLegal: (val: any) => void }) => {
   const [pushStatus, setPushStatus] = useState<'default' | 'granted' | 'denied' | 'loading'>('loading');
   const [loading, setLoading] = useState(false);
   const [showInstallGuide, setShowInstallGuide] = useState(false);
@@ -1634,6 +1977,21 @@ const ProfilePage = ({ user, achievements, onBack, onLogout, deferredPrompt, onI
                 <ChevronRight className="w-5 h-5 text-muted group-hover:translate-x-1 transition-all opacity-30" />
               </button>
 
+              <div className="pt-4 grid grid-cols-2 gap-4">
+                <button 
+                  onClick={() => setShowLegal({ open: true, type: 'terms' })}
+                  className="w-full py-4 rounded-2xl border border-white/5 text-muted text-[10px] font-bold uppercase tracking-widest hover:bg-white/5 transition-all text-center"
+                >
+                  Termos de Uso
+                </button>
+                <button 
+                  onClick={() => setShowLegal({ open: true, type: 'privacy' })}
+                  className="w-full py-4 rounded-2xl border border-white/5 text-muted text-[10px] font-bold uppercase tracking-widest hover:bg-white/5 transition-all text-center"
+                >
+                  Privacidade
+                </button>
+              </div>
+
               <button onClick={onLogout} className="w-full glass-card p-6 text-left text-red-500 flex items-center justify-between group">
                 <div className="flex items-center gap-4">
                   <div className="w-10 h-10 rounded-xl bg-red-500/10 flex items-center justify-center">
@@ -1667,6 +2025,11 @@ const ProfilePage = ({ user, achievements, onBack, onLogout, deferredPrompt, onI
       </main>
       <AnimatePresence>
         {showInstallGuide && <InstallGuide onClose={() => setShowInstallGuide(false)} deferredPrompt={deferredPrompt} onInstall={onInstall} />}
+        <TermsModal 
+          isOpen={showLegal.open} 
+          onClose={() => setShowLegal({ ...showLegal, open: false })} 
+          type={showLegal.type} 
+        />
       </AnimatePresence>
     </motion.div>
   );
@@ -1991,6 +2354,120 @@ const AdminPage = ({ onBack, currentUser }: { onBack: () => void, currentUser: U
   const [newName, setNewName] = useState('');
   const [adding, setAdding] = useState(false);
   const [bypassKiwify, setBypassKiwify] = useState(false);
+  const [seeding, setSeeding] = useState(false);
+  const [scheduledMessages, setScheduledMessages] = useState<any[]>([]);
+  const [msgTitle, setMsgTitle] = useState('');
+  const [msgBody, setMsgBody] = useState('');
+  const [msgDate, setMsgDate] = useState('');
+  const [msgTime, setMsgTime] = useState('');
+  const [analytics, setAnalytics] = useState<any>(null);
+  const [analyticsLoading, setAnalyticsLoading] = useState(false);
+
+  const fetchAnalytics = async () => {
+    if (!currentUser?.email) return;
+    setAnalyticsLoading(true);
+    try {
+      const res = await fetch(`/api/admin/analytics?adminEmail=${encodeURIComponent(currentUser.email)}`);
+      if (res.ok) {
+        setAnalytics(await res.json());
+      }
+    } catch (err) {
+      console.error("Error fetching analytics:", err);
+    } finally {
+      setAnalyticsLoading(false);
+    }
+  };
+
+  const fetchScheduledMessages = async () => {
+    try {
+      const q = query(collection(db, 'scheduled_messages'), orderBy('scheduled_at', 'desc'));
+      const snap = await getDocs(q);
+      setScheduledMessages(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    } catch (err) {
+      console.error("Error fetching scheduled messages:", err);
+    }
+  };
+
+  const handleScheduleMessage = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!msgTitle || !msgBody || !msgDate || !msgTime) return;
+    
+    try {
+      const scheduledAt = new Date(`${msgDate}T${msgTime}`).toISOString();
+      await addDoc(collection(db, 'scheduled_messages'), {
+        title: msgTitle,
+        body: msgBody,
+        scheduled_at: scheduledAt,
+        sent: false,
+        created_at: new Date().toISOString()
+      });
+      setMsgTitle('');
+      setMsgBody('');
+      setMsgDate('');
+      setMsgTime('');
+      fetchScheduledMessages();
+    } catch (err) {
+      console.error("Error scheduling message:", err);
+    }
+  };
+
+  const handleDeleteMessage = async (id: string) => {
+    if (!window.confirm("Excluir esta mensagem programada?")) return;
+    try {
+      await deleteDoc(doc(db, 'scheduled_messages', id));
+      fetchScheduledMessages();
+    } catch (err) {
+      console.error("Error deleting message:", err);
+    }
+  };
+
+  const seedFirestore = async () => {
+    if (!window.confirm("Deseja copiar todo o conteúdo do SQLite para o Firestore? Isso substituirá o conteúdo existente no Firestore.")) return;
+    setSeeding(true);
+    try {
+      const [daysRes, prayersRes, declsRes] = await Promise.all([
+        fetch('/api/days'),
+        fetch('/api/prayers'),
+        fetch('/api/declarations')
+      ]);
+
+      const daysData = await daysRes.json();
+      const prayersData = await prayersRes.json();
+      const declsData = await declsRes.json();
+
+      // Seed Days
+      const daysBatch = writeBatch(db);
+      daysData.forEach((day: any) => {
+        const ref = doc(db, 'days', day.id.toString());
+        daysBatch.set(ref, day);
+      });
+      await daysBatch.commit();
+
+      // Seed Prayers
+      const prayersBatch = writeBatch(db);
+      prayersData.forEach((prayer: any) => {
+        const ref = doc(db, 'prayers', prayer.id.toString());
+        prayersBatch.set(ref, prayer);
+      });
+      await prayersBatch.commit();
+
+      // Seed Declarations
+      const declsBatch = writeBatch(db);
+      declsData.forEach((decl: any) => {
+        const ref = doc(db, 'declarations', decl.id.toString());
+        declsBatch.set(ref, decl);
+      });
+      await declsBatch.commit();
+
+      alert("Firestore sincronizado com sucesso!");
+      window.location.reload();
+    } catch (err) {
+      console.error("Error seeding Firestore:", err);
+      alert("Erro ao sincronizar Firestore.");
+    } finally {
+      setSeeding(false);
+    }
+  };
 
   const fetchConfig = async () => {
     try {
@@ -2052,6 +2529,8 @@ const AdminPage = ({ onBack, currentUser }: { onBack: () => void, currentUser: U
   useEffect(() => {
     fetchUsers();
     fetchConfig();
+    fetchScheduledMessages();
+    fetchAnalytics();
   }, [currentUser]);
 
   const handleAddUser = async (e: React.FormEvent) => {
@@ -2140,6 +2619,225 @@ const AdminPage = ({ onBack, currentUser }: { onBack: () => void, currentUser: U
           </button>
         </div>
       </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        <section className="glass-card p-8 space-y-6">
+          <div className="flex items-center gap-3">
+            <Zap className="w-5 h-5 text-gold-500" />
+            <h3 className="text-lg display-bold">Sincronização de Conteúdo</h3>
+          </div>
+          <p className="text-sm text-muted">Copie as mensagens programadas (30 dias, orações e decretos) do SQLite para o Firestore para gerenciamento em nuvem.</p>
+          <Button 
+            variant="gold" 
+            className="w-full" 
+            onClick={seedFirestore} 
+            disabled={seeding}
+          >
+            {seeding ? <Loader2 className="w-4 h-4 animate-spin mx-auto" /> : 'Sincronizar SQLite -> Firestore'}
+          </Button>
+        </section>
+
+        <section className="glass-card p-8 space-y-6">
+          <div className="flex items-center gap-3">
+            <Bell className="w-5 h-5 text-gold-500" />
+            <h3 className="text-lg display-bold">Programar Notificação Push</h3>
+          </div>
+          <form onSubmit={handleScheduleMessage} className="space-y-4">
+            <input 
+              type="text" 
+              placeholder="Título da Notificação" 
+              className="app-input"
+              value={msgTitle}
+              onChange={(e) => setMsgTitle(e.target.value)}
+              required
+            />
+            <textarea 
+              placeholder="Corpo da Mensagem" 
+              className="app-input min-h-[100px]"
+              value={msgBody}
+              onChange={(e) => setMsgBody(e.target.value)}
+              required
+            />
+            <div className="grid grid-cols-2 gap-4">
+              <input 
+                type="date" 
+                className="app-input"
+                value={msgDate}
+                onChange={(e) => setMsgDate(e.target.value)}
+                required
+              />
+              <input 
+                type="time" 
+                className="app-input"
+                value={msgTime}
+                onChange={(e) => setMsgTime(e.target.value)}
+                required
+              />
+            </div>
+            <Button variant="gold" className="w-full">
+              Programar Mensagem
+            </Button>
+          </form>
+        </section>
+      </div>
+
+      {scheduledMessages.length > 0 && (
+        <section className="glass-card p-8 space-y-6">
+          <h3 className="text-lg display-bold">Mensagens Programadas</h3>
+          <div className="space-y-4">
+            {scheduledMessages.map(msg => (
+              <div key={msg.id} className="p-4 rounded-xl bg-white/5 border border-white/10 flex justify-between items-center">
+                <div className="space-y-1">
+                  <p className="font-bold">{msg.title}</p>
+                  <p className="text-xs text-muted">{msg.body}</p>
+                  <div className="flex items-center gap-2 text-[10px] uppercase tracking-widest font-bold">
+                    <Clock className="w-3 h-3 text-gold-500" />
+                    <span>{new Date(msg.scheduled_at).toLocaleString()}</span>
+                    {msg.sent ? (
+                      <span className="text-emerald-500 ml-2">Enviada</span>
+                    ) : (
+                      <span className="text-gold-500 ml-2">Pendente</span>
+                    )}
+                  </div>
+                </div>
+                <button 
+                  onClick={() => handleDeleteMessage(msg.id)}
+                  className="p-2 text-red-500 hover:bg-red-500/10 rounded-full transition-colors"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* Analytics Section */}
+      <section className="glass-card p-8 space-y-6">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-gold-500/10 flex items-center justify-center text-gold-500">
+              <Target className="w-6 h-6" />
+            </div>
+            <div>
+              <h3 className="text-lg display-bold">Análise de Funil</h3>
+              <p className="text-xs text-muted uppercase tracking-widest font-bold">Métricas de Conversão e Retenção</p>
+            </div>
+          </div>
+          <button 
+            onClick={fetchAnalytics}
+            disabled={analyticsLoading}
+            className="p-2 rounded-lg bg-white/5 hover:bg-white/10 transition-colors"
+          >
+            <Zap className={`w-5 h-5 ${analyticsLoading ? 'animate-spin' : ''}`} />
+          </button>
+        </div>
+
+        {analytics ? (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            {/* Funnel */}
+            <div className="p-6 rounded-2xl bg-white/5 border border-white/10 space-y-4">
+              <h4 className="text-xs font-bold uppercase tracking-widest text-muted">Conversão de Vendas</h4>
+              <div className="space-y-2">
+                <div className="flex justify-between text-sm">
+                  <span>Quiz Concluído</span>
+                  <span className="font-bold">{analytics.funnel.quizCompleted}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span>Vendas</span>
+                  <span className="font-bold">{analytics.funnel.purchaseCompleted}</span>
+                </div>
+                <div className="pt-2 border-t border-white/10 flex justify-between items-center">
+                  <span className="text-xs text-muted">Taxa de Conversão</span>
+                  <span className="text-lg font-bold text-gold-500">{analytics.funnel.conversionRate}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Retention */}
+            <div className="p-6 rounded-2xl bg-white/5 border border-white/10 space-y-4">
+              <h4 className="text-xs font-bold uppercase tracking-widest text-muted">Retenção de Usuários</h4>
+              <div className="space-y-2">
+                <div className="flex justify-between text-sm">
+                  <span>Dia 1 → Dia 7</span>
+                  <span className="font-bold">{analytics.retention.d1ToD7}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span>Dia 7 → Dia 30</span>
+                  <span className="font-bold">{analytics.retention.d7ToD30}</span>
+                </div>
+                <div className="pt-2 border-t border-white/10 flex justify-between items-center">
+                  <span className="text-xs text-muted">Concluíram Dia 30</span>
+                  <span className="text-lg font-bold text-emerald-500">{analytics.retention.day30}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Subscription */}
+            <div className="p-6 rounded-2xl bg-white/5 border border-white/10 space-y-4">
+              <h4 className="text-xs font-bold uppercase tracking-widest text-muted">Assinaturas Premium</h4>
+              <div className="space-y-2">
+                <div className="flex justify-between text-sm">
+                  <span>Paywall Visualizado</span>
+                  <span className="font-bold">{analytics.subscription.paywallViewed}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span>Assinaturas</span>
+                  <span className="font-bold">{analytics.subscription.subscriptionStarted}</span>
+                </div>
+                <div className="pt-2 border-t border-white/10 flex justify-between items-center">
+                  <span className="text-xs text-muted">Taxa de Assinatura</span>
+                  <span className="text-lg font-bold text-gold-500">{analytics.subscription.conversionRate}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="py-12 text-center text-muted italic">
+            Carregando métricas...
+          </div>
+        )}
+      </section>
+
+      {/* Automation Section */}
+      <section className="glass-card p-8 space-y-6">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-gold-500/10 flex items-center justify-center text-gold-500">
+            <Zap className="w-6 h-6" />
+          </div>
+          <div>
+            <h3 className="text-lg display-bold">Automação Diária</h3>
+            <p className="text-xs text-muted uppercase tracking-widest font-bold">Processamento de Status de Usuários</p>
+          </div>
+        </div>
+        <div className="p-6 rounded-2xl bg-gold-500/5 border border-gold-500/20 flex items-center justify-between">
+          <div className="space-y-1">
+            <p className="text-sm font-bold">Executar Tarefas Diárias</p>
+            <p className="text-xs text-muted">Marca usuários como 'atRisk' ou 'upsellReady'</p>
+          </div>
+          <button 
+            onClick={async () => {
+              if (!window.confirm("Executar tarefas de automação agora?")) return;
+              try {
+                const res = await fetch('/api/admin/daily-tasks', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ adminEmail: currentUser?.email })
+                });
+                if (res.ok) {
+                  const data = await res.json();
+                  alert(`Sucesso! ${data.updatedCount} usuários atualizados.`);
+                }
+              } catch (err) {
+                alert("Erro ao executar tarefas.");
+              }
+            }}
+            className="px-6 py-2 bg-gold-500 text-white rounded-xl text-xs font-bold uppercase tracking-widest"
+          >
+            Executar Agora
+          </button>
+        </div>
+      </section>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
         <section className="glass-card p-8 space-y-6">
@@ -2319,7 +3017,7 @@ const PendingAccess = ({ firebaseUser, onLogout }: { firebaseUser: FirebaseUser,
   );
 };
 
-const LoginView = () => {
+const LoginView = ({ showLegal, setShowLegal }: { showLegal: { open: boolean, type: 'terms' | 'privacy' }, setShowLegal: (val: any) => void }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -2327,7 +3025,6 @@ const LoginView = () => {
   const [password, setPassword] = useState('');
   const [isRegistering, setIsRegistering] = useState(false);
   const [isForgotPassword, setIsForgotPassword] = useState(false);
-  const [showLegal, setShowLegal] = useState<{ open: boolean, type: 'terms' | 'privacy' }>({ open: false, type: 'terms' });
 
   const handleGoogleLogin = async () => {
     setLoading(true);
@@ -2595,7 +3292,7 @@ const LoginView = () => {
 };
 
 export default function App() {
-  const [view, setView] = useState<'home' | 'day' | 'crisis' | 'checklist' | 'declarations' | 'diary' | 'profile' | 'congratulations' | 'admin'>('home');
+  const [view, setView] = useState<'home' | 'day' | 'crisis' | 'checklist' | 'declarations' | 'diary' | 'profile' | 'congratulations' | 'admin' | 'onboarding'>('home');
   const [user, setUser] = useState<User | null>(null);
   const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
   const [currentDay, setCurrentDay] = useState<Day | null>(null);
@@ -2606,6 +3303,11 @@ export default function App() {
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [cachedDaysCount, setCachedDaysCount] = useState(0);
+  const [showLegal, setShowLegal] = useState<{ open: boolean, type: 'terms' | 'privacy' }>({ open: false, type: 'terms' });
+  const [days, setDays] = useState<Day[]>([]);
+  const [prayers, setPrayers] = useState<Prayer[]>([]);
+  const [declarations, setDeclarations] = useState<Declaration[]>([]);
+  const [contentLoading, setContentLoading] = useState(true);
 
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
@@ -2656,6 +3358,49 @@ export default function App() {
     // Also update when storage changes (e.g. from other tabs or our own logic)
     window.addEventListener('storage', countCachedDays);
     return () => window.removeEventListener('storage', countCachedDays);
+  }, []);
+
+  useEffect(() => {
+    const fetchContent = async () => {
+      setContentLoading(true);
+      try {
+        // Try Firestore first
+        const daysRef = collection(db, 'days');
+        const prayersRef = collection(db, 'prayers');
+        const declsRef = collection(db, 'declarations');
+
+        const [daysSnap, prayersSnap, declsSnap] = await Promise.all([
+          getDocs(query(daysRef, orderBy('id'))),
+          getDocs(query(prayersRef, orderBy('id'))),
+          getDocs(query(declsRef, orderBy('id')))
+        ]);
+
+        if (!daysSnap.empty) {
+          setDays(daysSnap.docs.map(doc => doc.data() as Day));
+          setPrayers(prayersSnap.docs.map(doc => doc.data() as Prayer));
+          setDeclarations(declsSnap.docs.map(doc => doc.data() as Declaration));
+          console.log("[Content] Loaded from Firestore");
+        } else {
+          // Fallback to API
+          console.log("[Content] Firestore empty, fetching from API...");
+          const [daysRes, prayersRes, declsRes] = await Promise.all([
+            fetch('/api/days'),
+            fetch('/api/prayers'),
+            fetch('/api/declarations')
+          ]);
+          
+          if (daysRes.ok) setDays(await daysRes.json());
+          if (prayersRes.ok) setPrayers(await prayersRes.json());
+          if (declsRes.ok) setDeclarations(await declsRes.json());
+        }
+      } catch (err) {
+        console.error("[Content] Error fetching:", err);
+      } finally {
+        setContentLoading(false);
+      }
+    };
+
+    fetchContent();
   }, []);
 
   useEffect(() => {
@@ -2779,6 +3524,12 @@ export default function App() {
     }
   }, []);
 
+  useEffect(() => {
+    if (user && user.onboarding_step === 0 && view !== 'onboarding') {
+      setView('onboarding');
+    }
+  }, [user, view]);
+
   const toggleTheme = () => {
     const newTheme = theme === 'dark' ? 'light' : 'dark';
     setTheme(newTheme);
@@ -2858,6 +3609,14 @@ export default function App() {
       } catch (e) {
         console.error(`[Cache] Error parsing cached day ${dayId}`, e);
         localStorage.removeItem(`day_${dayId}`);
+      }
+    } else {
+      // Try state
+      const stateDay = days.find(d => d.id === dayId);
+      if (stateDay) {
+        setCurrentDay(stateDay);
+        setView('day');
+        console.log(`[State] Loaded day ${dayId} from state`);
       }
     }
 
@@ -3020,6 +3779,17 @@ export default function App() {
         "streak_30": 30
       };
 
+      // Track day completion
+      trackEvent(`day_${currentDay.id}_completed`, user.id, {
+        streak: newStreak,
+        progress: newProgress
+      });
+
+      if (currentDay.id === 1) trackEvent('day_1_completed', user.id);
+      if (currentDay.id === 7) trackEvent('day_7_completed', user.id);
+      if (currentDay.id === 15) trackEvent('day_15_reached', user.id);
+      if (currentDay.id === 30) trackEvent('day_30_completed', user.id);
+
       console.log("[Achievements] Checking thresholds for streak:", newStreak);
       for (const [achId, threshold] of Object.entries(thresholds)) {
         // Only award if not already earned
@@ -3048,13 +3818,19 @@ export default function App() {
 
       // Update local state
       if (user) {
-        setUser({
+        const updatedUser = {
           ...user,
           progress: newProgress,
           streak: newStreak,
           last_access: now.toISOString(),
           last_completion_date: todayStr
-        });
+        };
+        setUser(updatedUser);
+
+        // Day 1 Final Message logic
+        if (newProgress === 1) {
+          setView('onboarding');
+        }
       }
 
       console.log("Day completion successful. Navigating...");
@@ -3068,6 +3844,27 @@ export default function App() {
       handleFirestoreError(err, OperationType.UPDATE, `users/${user.id}`);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const updateOnboarding = async (step: number, commitmentAccepted?: boolean) => {
+    if (!user) return;
+    try {
+      const userRef = doc(db, 'users', user.id);
+      const updates: any = { onboarding_step: step };
+      if (commitmentAccepted !== undefined) updates.commitment_accepted = commitmentAccepted;
+      
+      await updateDoc(userRef, updates);
+      
+      const updatedUser = { ...user, ...updates };
+      setUser(updatedUser);
+      localStorage.setItem('user_cache_', JSON.stringify(updatedUser));
+
+      if (step === 3 && commitmentAccepted) {
+        setView('home');
+      }
+    } catch (err) {
+      console.error("Error updating onboarding:", err);
     }
   };
 
@@ -3099,8 +3896,19 @@ export default function App() {
             firebaseUser ? (
               <PendingAccess firebaseUser={firebaseUser} onLogout={handleLogout} />
             ) : (
-              <LoginView />
+              <LoginView showLegal={showLegal} setShowLegal={setShowLegal} />
             )
+          ) : view === 'onboarding' ? (
+            <OnboardingFlow 
+              user={user} 
+              onComplete={(step, commitment) => {
+                if (step === 3 && commitment) {
+                  updateOnboarding(step, commitment);
+                } else {
+                  updateOnboarding(step);
+                }
+              }} 
+            />
           ) : (
             <>
               {view === 'home' && (
@@ -3120,6 +3928,7 @@ export default function App() {
                   onInstall={handleInstall}
                   isOnline={isOnline}
                   cachedDaysCount={cachedDaysCount}
+                  declarations={declarations}
                 />
               )}
               {view === 'day' && currentDay && (
@@ -3130,8 +3939,8 @@ export default function App() {
                   onBack={() => setView('home')} 
                 />
               )}
-              {view === 'crisis' && <CrisisMode onBack={() => setView('home')} />}
-              {view === 'declarations' && <DeclarationsPage onBack={() => setView('home')} />}
+              {view === 'crisis' && <CrisisMode onBack={() => setView('home')} prayers={prayers} />}
+              {view === 'declarations' && <DeclarationsPage onBack={() => setView('home')} declarations={declarations} />}
               {view === 'checklist' && <ChecklistPage userId={user.id} onBack={() => setView('home')} />}
               {view === 'diary' && (
                 <DiaryPage 
@@ -3150,6 +3959,8 @@ export default function App() {
                   deferredPrompt={deferredPrompt} 
                   onInstall={handleInstall}
                   onOpenCongratulations={() => setView('congratulations')}
+                  showLegal={showLegal}
+                  setShowLegal={setShowLegal}
                 />
               )}
             </>
@@ -3157,7 +3968,7 @@ export default function App() {
         </AnimatePresence>
 
         {/* Navigation Bar */}
-        {['home', 'diary', 'profile', 'checklist', 'declarations', 'crisis'].includes(view) && (
+        {user && ['home', 'diary', 'profile', 'checklist', 'declarations', 'crisis'].includes(view) && (
           <nav className="fixed bottom-0 left-0 right-0 max-w-6xl mx-auto nav-blur px-8 py-4 flex justify-between items-center z-20">
             <button 
               onClick={() => setView('home')}

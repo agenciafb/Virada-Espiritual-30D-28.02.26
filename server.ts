@@ -6,8 +6,17 @@ import { fileURLToPath } from "url";
 import dotenv from "dotenv";
 import webpush from "web-push";
 import crypto from "crypto";
+import admin from "firebase-admin";
 
 dotenv.config();
+
+// Initialize Firebase Admin
+if (!admin.apps.length) {
+  admin.initializeApp({
+    projectId: process.env.VITE_FIREBASE_PROJECT_ID || "virada-espiritual-30d"
+  });
+}
+const firestore = admin.firestore();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -25,7 +34,9 @@ db.exec(`
     streak INTEGER DEFAULT 0,
     progress INTEGER DEFAULT 0,
     last_access TEXT,
-    last_completion_date TEXT
+    last_completion_date TEXT,
+    onboarding_step INTEGER DEFAULT 0,
+    commitment_accepted INTEGER DEFAULT 0
   );
   CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 
@@ -369,7 +380,7 @@ async function startServer() {
 
   // Webhook para Kiwify
   // Configure este URL no Kiwify: https://seu-app.run.app/api/webhook/kiwify?token=SEU_TOKEN
-  app.post("/api/webhook/kiwify", (req, res) => {
+  app.post("/api/webhook/kiwify", async (req, res) => {
     try {
       // Verificação de segurança (Token secreto configurado no Kiwify e no .env)
       const kiwifyToken = process.env.KIWIFY_TOKEN;
@@ -401,7 +412,7 @@ async function startServer() {
         return res.status(401).send("Unauthorized");
       }
 
-      const { order_status, customer } = req.body;
+      const { order_status, customer, product_name, subscription_id, event_id } = req.body;
 
       if (!customer?.email) {
         return res.status(400).send("Bad Request: Missing customer email");
@@ -413,24 +424,89 @@ async function startServer() {
       // Log para debug
       console.log(`[Kiwify Webhook] Status: ${order_status}, Email: ${email}`);
 
-      // Kiwify envia 'paid' ou 'approved' dependendo da versão/configuração
-      if (order_status === "paid" || order_status === "approved") {
-        // Verifica se o usuário já existe
-        const existingUser = db.prepare("SELECT * FROM users WHERE email = ?").get(email);
+      // Log in Firestore
+      await firestore.collection('webhook_logs').add({
+        provider: 'kiwify',
+        payload: req.body,
+        timestamp: admin.firestore.FieldValue.serverTimestamp()
+      });
 
-        if (!existingUser) {
-          const id = Math.random().toString(36).substring(2, 15);
-          db.prepare("INSERT INTO users (id, email, name, plan) VALUES (?, ?, ?, ?)").run(id, email, name, 'premium');
-          console.log(`Novo comprador liberado: ${email}`);
-        } else {
-          // Garante que o plano está como premium
-          db.prepare("UPDATE users SET plan = 'premium' WHERE email = ?").run(email);
-          console.log(`Comprador já possuía acesso, plano atualizado: ${email}`);
-        }
-      } else if (order_status === "refunded" || order_status === "chargedback" || order_status === "canceled") {
-        // Revoga acesso
-        db.prepare("DELETE FROM users WHERE email = ?").run(email);
-        console.log(`Acesso revogado para: ${email} (Status: ${order_status})`);
+      // Find user in Firestore
+      const usersRef = firestore.collection('users');
+      const snapshot = await usersRef.where('email', '==', email).get();
+      let userDoc = snapshot.empty ? null : snapshot.docs[0];
+
+      const now = admin.firestore.Timestamp.now();
+      const expiresAt = admin.firestore.Timestamp.fromDate(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000));
+
+      const updateData: any = {
+        email,
+        name,
+        updatedAt: now
+      };
+
+      if (order_status === "paid" || order_status === "approved") {
+        updateData.hasAccess = true;
+        updateData.accessExpiresAt = expiresAt;
+        updateData.plan = 'premium';
+        
+        // SQLite sync (optional but good for consistency)
+        db.prepare("INSERT OR REPLACE INTO users (id, email, name, plan) VALUES (?, ?, ?, ?)").run(userDoc?.id || Math.random().toString(36).substring(2, 15), email, name, 'premium');
+      } else if (order_status === "subscription_approved") {
+        updateData.hasAccess = true;
+        updateData.isSubscriber = true;
+        updateData.subscriptionStatus = "active";
+        updateData.subscriptionType = product_name?.toLowerCase().includes("anual") ? "annual" : "monthly";
+      } else if (order_status === "subscription_canceled") {
+        updateData.isSubscriber = false;
+        updateData.subscriptionStatus = "canceled";
+      } else if (order_status === "refunded" || order_status === "chargedback") {
+        updateData.hasAccess = false;
+        updateData.isSubscriber = false;
+        updateData.plan = 'free';
+        
+        // SQLite sync
+        db.prepare("UPDATE users SET plan = 'free' WHERE email = ?").run(email);
+      }
+
+      if (userDoc) {
+        await userDoc.ref.update(updateData);
+      } else if (order_status === "paid" || order_status === "approved" || order_status === "subscription_approved") {
+        const id = Math.random().toString(36).substring(2, 15);
+        await usersRef.doc(id).set({
+          ...updateData,
+          id,
+          createdAt: now,
+          progress: 0,
+          streak: 0
+        });
+      }
+
+      // Meta Conversion API (Server-side)
+      if (order_status === "paid" || order_status === "approved" || order_status === "subscription_approved") {
+        const eventName = order_status === "subscription_approved" ? "subscription_started" : "purchase_completed";
+        
+        // Track in Firestore events collection for funnel analytics
+        await firestore.collection('events').add({
+          eventName,
+          userId: userDoc?.id || 'new_user',
+          email,
+          timestamp: admin.firestore.FieldValue.serverTimestamp(),
+          metadata: {
+            order_id: req.body.order_id,
+            product_name,
+            value: req.body.order_value / 100 || 0
+          }
+        });
+
+        await trackMetaEvent({
+          event_name: order_status === "subscription_approved" ? "Subscribe" : "Purchase",
+          email: email,
+          ip: req.ip,
+          user_agent: req.headers['user-agent'] || '',
+          value: req.body.order_value / 100 || 0,
+          currency: 'BRL'
+        });
       }
 
       // Sempre retorne 200 para o Kiwify não tentar reenviar
@@ -438,6 +514,169 @@ async function startServer() {
     } catch (err) {
       console.error("Erro no Webhook Kiwify:", err);
       res.status(500).send("Internal Server Error");
+    }
+  });
+
+  // Meta Conversion API Endpoint
+  app.post("/api/track-meta-event", async (req, res) => {
+    try {
+      const { event_name, email, metadata } = req.body;
+      await trackMetaEvent({
+        event_name,
+        email,
+        ip: req.ip,
+        user_agent: req.headers['user-agent'] || '',
+        ...metadata
+      });
+      res.json({ success: true });
+    } catch (err) {
+      console.error("Error tracking Meta event:", err);
+      res.status(500).json({ error: "Failed to track event" });
+    }
+  });
+
+  async function trackMetaEvent(data: any) {
+    const pixelId = process.env.VITE_META_PIXEL_ID;
+    const accessToken = process.env.META_ACCESS_TOKEN;
+
+    if (!pixelId || !accessToken) {
+      console.warn("[Meta CAPI] Missing Pixel ID or Access Token. Skipping.");
+      return;
+    }
+
+    const hashedEmail = crypto.createHash('sha256').update(data.email.toLowerCase().trim()).digest('hex');
+
+    const payload = {
+      data: [
+        {
+          event_name: data.event_name,
+          event_time: Math.floor(Date.now() / 1000),
+          action_source: 'website',
+          user_data: {
+            em: [hashedEmail],
+            client_ip_address: data.ip,
+            client_user_agent: data.user_agent
+          },
+          custom_data: {
+            value: data.value,
+            currency: data.currency || 'BRL'
+          }
+        }
+      ]
+    };
+
+    try {
+      const response = await fetch(`https://graph.facebook.com/v17.0/${pixelId}/events?access_token=${accessToken}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const result = await response.json();
+      console.log(`[Meta CAPI] Event ${data.event_name} sent:`, result);
+    } catch (err) {
+      console.error("[Meta CAPI] Error:", err);
+    }
+  }
+
+  // --- Automation & Analytics ---
+
+  // Daily Automation Task
+  // This would be triggered by a CRON job (e.g., Google Cloud Scheduler)
+  app.post("/api/admin/daily-tasks", async (req, res) => {
+    try {
+      const { adminEmail } = req.body;
+      if (adminEmail !== ADMIN_EMAIL) return res.status(403).json({ error: "Unauthorized" });
+
+      const now = new Date();
+      const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+      const day30Threshold = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000); // 3 days before day 30
+
+      const usersRef = firestore.collection('users');
+      const batch = firestore.batch();
+      let updatedCount = 0;
+
+      // 1. Find inactive users (atRisk)
+      const inactiveSnapshot = await usersRef
+        .where('last_access', '<', yesterday.toISOString())
+        .where('status', '!=', 'atRisk')
+        .get();
+
+      inactiveSnapshot.forEach(doc => {
+        batch.update(doc.ref, { status: 'atRisk', updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+        updatedCount++;
+      });
+
+      // 2. Find users near day 30 (upsellReady)
+      const upsellSnapshot = await usersRef
+        .where('progress', '>=', 27)
+        .where('progress', '<', 30)
+        .where('status', '!=', 'upsellReady')
+        .get();
+
+      upsellSnapshot.forEach(doc => {
+        batch.update(doc.ref, { status: 'upsellReady', updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+        updatedCount++;
+      });
+
+      if (updatedCount > 0) {
+        await batch.commit();
+      }
+
+      res.json({ success: true, updatedCount });
+    } catch (err) {
+      console.error("Error running daily tasks:", err);
+      res.status(500).json({ error: "Failed to run daily tasks" });
+    }
+  });
+
+  // Funnel Analytics
+  app.get("/api/admin/analytics", async (req, res) => {
+    try {
+      const { adminEmail } = req.query;
+      if (adminEmail !== ADMIN_EMAIL) return res.status(403).json({ error: "Unauthorized" });
+
+      const eventsRef = firestore.collection('events');
+      
+      // 1. Conversion Rate (quiz_completed -> purchase_completed)
+      const quizCompletedCount = (await eventsRef.where('eventName', '==', 'quiz_completed').count().get()).data().count;
+      const purchaseCompletedCount = (await eventsRef.where('eventName', '==', 'purchase_completed').count().get()).data().count;
+      const conversionRate = quizCompletedCount > 0 ? (purchaseCompletedCount / quizCompletedCount) * 100 : 0;
+
+      // 2. Retention (Day 1 -> Day 7 -> Day 30)
+      const day1Count = (await eventsRef.where('eventName', '==', 'day_1_completed').count().get()).data().count;
+      const day7Count = (await eventsRef.where('eventName', '==', 'day_7_completed').count().get()).data().count;
+      const day30Count = (await eventsRef.where('eventName', '==', 'day_30_completed').count().get()).data().count;
+
+      const retentionD1toD7 = day1Count > 0 ? (day7Count / day1Count) * 100 : 0;
+      const retentionD7toD30 = day7Count > 0 ? (day30Count / day7Count) * 100 : 0;
+
+      // 3. Subscription Conversion Rate
+      const paywallViewedCount = (await eventsRef.where('eventName', '==', 'paywall_viewed').count().get()).data().count;
+      const subscriptionStartedCount = (await eventsRef.where('eventName', '==', 'subscription_started').count().get()).data().count;
+      const subConversionRate = paywallViewedCount > 0 ? (subscriptionStartedCount / paywallViewedCount) * 100 : 0;
+
+      res.json({
+        funnel: {
+          quizCompleted: quizCompletedCount,
+          purchaseCompleted: purchaseCompletedCount,
+          conversionRate: conversionRate.toFixed(2) + '%'
+        },
+        retention: {
+          day1: day1Count,
+          day7: day7Count,
+          day30: day30Count,
+          d1ToD7: retentionD1toD7.toFixed(2) + '%',
+          d7ToD30: retentionD7toD30.toFixed(2) + '%'
+        },
+        subscription: {
+          paywallViewed: paywallViewedCount,
+          subscriptionStarted: subscriptionStartedCount,
+          conversionRate: subConversionRate.toFixed(2) + '%'
+        }
+      });
+    } catch (err) {
+      console.error("Error fetching analytics:", err);
+      res.status(500).json({ error: "Failed to fetch analytics" });
     }
   });
 
@@ -793,7 +1032,41 @@ async function startServer() {
         await sendAllNotifications("Antes de dormir...", "Escreva uma gratidão pelo seu dia.");
       }
     }, 60000); // Check every minute
+
+    // Daily Automation (Runs every 24 hours)
+    setInterval(async () => {
+      console.log("[Automation] Running daily checks...");
+      await runDailyAutomation();
+    }, 24 * 60 * 60 * 1000);
   });
+
+  async function runDailyAutomation() {
+    try {
+      const now = new Date();
+      const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+      
+      const usersRef = firestore.collection('users');
+      
+      // 1. Find inactive users (atRisk)
+      const inactiveSnapshot = await usersRef.where('last_access', '<', oneDayAgo.toISOString()).get();
+      const batch = firestore.batch();
+      
+      inactiveSnapshot.forEach(doc => {
+        batch.update(doc.ref, { status: 'atRisk' });
+      });
+      
+      // 2. Find users near day 30 (upsellReady)
+      const nearEndSnapshot = await usersRef.where('progress', '>=', 25).where('progress', '<', 30).get();
+      nearEndSnapshot.forEach(doc => {
+        batch.update(doc.ref, { status: 'upsellReady' });
+      });
+      
+      await batch.commit();
+      console.log(`[Automation] Completed. Updated ${inactiveSnapshot.size + nearEndSnapshot.size} users.`);
+    } catch (err) {
+      console.error("[Automation] Error:", err);
+    }
+  }
 
   async function sendAllNotifications(title: string, body: string) {
     try {

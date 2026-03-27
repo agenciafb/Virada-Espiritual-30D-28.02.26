@@ -1,8 +1,76 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /{document=**} {
-      allow read, write: if true;
+    
+    // Helper Functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    function isAdmin() {
+      return isAuthenticated() && (
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin') ||
+        (request.auth.token.email == "fbassistecjari@gmail.com" && request.auth.token.email_verified == true)
+      );
+    }
+
+    // Content Collections - Publicly readable by authenticated users, writable by admins
+    match /days/{dayId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+    
+    match /prayers/{prayerId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+    
+    match /declarations/{declarationId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+    
+    match /scheduled_messages/{messageId} {
+      allow read: if isAdmin();
+      allow write: if isAdmin();
+    }
+
+    // User Data
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create: if isAuthenticated() && request.auth.uid == userId;
+      allow update: if isOwner(userId) || isAdmin();
+      
+      match /checklists/{date} {
+        allow read, write: if isOwner(userId) || isAdmin();
+      }
+      
+      match /diary/{date} {
+        allow read, write: if isOwner(userId) || isAdmin();
+      }
+      
+      match /reflections/{dayId} {
+        allow read, write: if isOwner(userId) || isAdmin();
+      }
+      
+      match /achievements/{achievementId} {
+        allow read: if isOwner(userId) || isAdmin();
+        allow write: if isAdmin();
+      }
+    }
+
+    match /webhook_logs/{logId} {
+      allow read, write: if isAdmin();
+    }
+
+    match /events/{eventId} {
+      allow read: if isAdmin();
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
     }
   }
 }
